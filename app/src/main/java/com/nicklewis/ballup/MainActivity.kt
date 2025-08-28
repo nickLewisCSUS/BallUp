@@ -2,7 +2,9 @@
 
 package com.nicklewis.ballup
 
+import android.content.pm.PackageManager
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -20,6 +22,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.ktx.toObject
+import com.nicklewis.ballup.nav.BallUpApp
 
 // Maps
 import com.google.android.gms.maps.CameraUpdateFactory
@@ -29,32 +32,26 @@ import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.MarkerOptions
 
 data class Court(
-    val name: String = "",
-    val type: String = "",
-    val address: String = "",
-    val geo: Geo? = null,
-    val amenities: Amenities? = null,
-    val createdAt: com.google.firebase.Timestamp? = null,
-    val createdBy: String? = null
+    var name: String? = null,
+    var type: String? = null,
+    var address: String? = null,
+    var geo: Geo? = null,
+    var amenities: Amenities? = null,
+    var createdAt: com.google.firebase.Timestamp? = null,
+    var createdBy: String? = null
 )
-
-data class Geo(
-    val lat: Double? = null,
-    val lng: Double? = null
-)
-
-data class Amenities(
-    val lights: Boolean? = null,
-    val restrooms: Boolean? = null
-)
+data class Geo(var lat: Double? = null, var lng: Double? = null)
+data class Amenities(var lights: Boolean? = null, var restrooms: Boolean? = null)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // DEBUG: is the API key in the manifest at runtime?
+        val ai = packageManager.getApplicationInfo(packageName, PackageManager.GET_META_DATA)
+        val mapsKey = ai.metaData.getString("com.google.android.geo.API_KEY")
+        Log.i("MAPS", "Resolved API key length=${mapsKey?.length} prefix=${mapsKey?.take(8)}")
         setContent {
-            // TEMP: show the map screen
-            CourtsMapScreen()
-            // To go back to the list: CourtsScreen()
+            BallUpApp()
         }
     }
 }
@@ -78,48 +75,51 @@ fun CourtsScreen() {
             }
     }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("BallUp — Courts") }) }) { padding ->
-        Column(Modifier.padding(padding).padding(16.dp)) {
-            if (error != null) Text("Error: $error", color = MaterialTheme.colorScheme.error)
-            if (courts.isEmpty()) Text("No courts yet. Add one in Firestore to see it here.")
+    // No inner Scaffold or TopAppBar — the app shell provides those.
+    Column(Modifier.fillMaxSize().padding(16.dp)) {
+        if (error != null) Text("Error: $error", color = MaterialTheme.colorScheme.error)
+        if (courts.isEmpty()) Text("No courts yet. Add one in Firestore to see it here.")
 
-            Button(
-                onClick = {
-                    val courtId = courts.firstOrNull()?.first ?: return@Button
-                    val run = mapOf(
-                        "courtId" to courtId,
-                        "status" to "active",
-                        "startTime" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
-                        "hostId" to "uid_dev",
-                        "mode" to "5v5",
-                        "maxPlayers" to 10,
-                        "lastHeartbeatAt" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
-                        "playerCount" to 1
-                    )
-                    db.collection("runs").add(run)
-                },
-                modifier = Modifier.padding(bottom = 12.dp)
-            ) { Text("Start a Test Run at First Court") }
+        Button(
+            onClick = {
+                val courtId = courts.firstOrNull()?.first ?: return@Button
+                val run = mapOf(
+                    "courtId" to courtId,
+                    "status" to "active",
+                    "startTime" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
+                    "hostId" to "uid_dev",
+                    "mode" to "5v5",
+                    "maxPlayers" to 10,
+                    "lastHeartbeatAt" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
+                    "playerCount" to 1
+                )
+                db.collection("runs").add(run)
+            },
+            modifier = Modifier.padding(bottom = 12.dp)
+        ) { Text("Start a Test Run at First Court") }
 
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(courts) { (id, court) ->
-                    ElevatedCard {
-                        Column(Modifier.padding(12.dp)) {
-                            Text(court.name, style = MaterialTheme.typography.titleMedium)
-                            Text("${court.type.uppercase()} • ${court.address}")
-                            val lat = court.geo?.lat
-                            val lng = court.geo?.lng
-                            if (lat != null && lng != null) {
-                                Text("($lat, $lng)", style = MaterialTheme.typography.bodySmall)
-                            }
-                            Text("id: $id", style = MaterialTheme.typography.bodySmall)
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(courts) { (id, court) ->
+                ElevatedCard {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(court.name.orEmpty(), style = MaterialTheme.typography.titleMedium)
+                        Text("${court.type?.uppercase().orEmpty()} • ${court.address.orEmpty()}")
+                        val lat = court.geo?.lat
+                        val lng = court.geo?.lng
+                        if (lat != null && lng != null) {
+                            Text("($lat, $lng)", style = MaterialTheme.typography.bodySmall)
                         }
+                        Text("id: $id", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
         }
     }
 }
+
 
 /* --------------------  MAP SCREEN  -------------------- */
 

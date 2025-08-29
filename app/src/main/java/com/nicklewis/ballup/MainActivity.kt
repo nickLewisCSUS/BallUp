@@ -30,6 +30,7 @@ import com.google.android.gms.maps.MapView
 import com.google.android.gms.maps.MapsInitializer
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.MarkerOptions
+import com.google.firebase.auth.FirebaseAuth
 
 data class Court(
     var name: String? = null,
@@ -46,10 +47,15 @@ data class Amenities(var lights: Boolean? = null, var restrooms: Boolean? = null
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // DEBUG: is the API key in the manifest at runtime?
-        val ai = packageManager.getApplicationInfo(packageName, PackageManager.GET_META_DATA)
-        val mapsKey = ai.metaData.getString("com.google.android.geo.API_KEY")
-        Log.i("MAPS", "Resolved API key length=${mapsKey?.length} prefix=${mapsKey?.take(8)}")
+
+        // Sign in (once) with anonymous auth so Firestore can fetch a token
+        val auth = FirebaseAuth.getInstance()
+        if (auth.currentUser == null) {
+            auth.signInAnonymously()
+                .addOnSuccessListener { Log.d("AUTH", "anon ok: ${it.user?.uid}") }
+                .addOnFailureListener { e -> Log.e("AUTH", "anon fail", e) }
+        }
+
         setContent {
             BallUpApp()
         }

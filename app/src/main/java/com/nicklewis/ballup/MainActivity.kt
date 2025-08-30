@@ -159,8 +159,8 @@ fun CourtsMapScreen() {
     val db = remember { FirebaseFirestore.getInstance() }
     var courts by remember { mutableStateOf(listOf<Pair<String, Court>>()) }
     var error by remember { mutableStateOf<String?>(null) }
-    var cameraMoved by remember { mutableStateOf(false) } // move only once
 
+    // 1) get data
     LaunchedEffect(Unit) {
         db.collection("courts")
             .orderBy("name", Query.Direction.ASCENDING)
@@ -170,48 +170,66 @@ fun CourtsMapScreen() {
             }
     }
 
+    // 2) hold onto the GoogleMap instance
     val mapView = rememberMapViewWithLifecycle()
-    val context = LocalContext.current
+    var gmap by remember { mutableStateOf<com.google.android.gms.maps.GoogleMap?>(null) }
 
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = {
-            MapsInitializer.initialize(context)
-            mapView.getMapAsync { googleMap ->
-                googleMap.uiSettings.isZoomControlsEnabled = true
-
-                // Hard-coded fallback so you instantly see the map
-                val sac = LatLng(38.5816, -121.4944)
-                googleMap.moveCamera(CameraUpdateFactory.newLatLngZoom(sac, 12f))
-                googleMap.addMarker(MarkerOptions().position(sac).title("Sacramento"))
+            MapsInitializer.initialize(it)
+            mapView.getMapAsync { m ->
+                m.uiSettings.isZoomControlsEnabled = true
+                gmap = m
             }
             mapView
-        },
-        update = { view ->
-            view.getMapAsync { googleMap ->
-                googleMap.clear()
-                // re-add the fallback marker (keeps showing even if courts are empty)
-                val sac = LatLng(38.5816, -121.4944)
-                googleMap.addMarker(MarkerOptions().position(sac).title("Sacramento"))
-
-                // then draw your Firestore courts
-                courts.forEach { (_, court) ->
-                    val lat = court.geo?.lat
-                    val lng = court.geo?.lng
-                    if (lat != null && lng != null) {
-                        googleMap.addMarker(
-                            MarkerOptions()
-                                .position(LatLng(lat, lng))
-                                .title(court.name)
-                                .snippet("${court.type} • ${court.address}")
-                        )
-                    }
-                }
-            }
         }
     )
+
+    // 3) update markers/camera whenever map or data changes
+    LaunchedEffect(gmap, courts) {
+        val map = gmap ?: return@LaunchedEffect
+        map.clear()
+
+        val points = mutableListOf<LatLng>()
+        courts.forEach { (_, c) ->
+            val lat = c.geo?.lat
+            val lng = c.geo?.lng
+            if (lat != null && lng != null) {
+                val p = LatLng(lat, lng)
+                map.addMarker(
+                    MarkerOptions()
+                        .position(p)
+                        .title(c.name.orEmpty())
+                        .snippet("${c.type.orEmpty()} • ${c.address.orEmpty()}")
+                )
+                points += p
+            }
+        }
+
+        if (points.isEmpty()) {
+            // only if there are no courts
+            val sac = LatLng(38.5816, -121.4944)
+            map.moveCamera(CameraUpdateFactory.newLatLngZoom(sac, 12f))
+            map.addMarker(MarkerOptions().position(sac).title("Sacramento"))
+            return@LaunchedEffect
+        }
+
+        // Ensure camera moves AFTER tiles/layout are ready
+        map.setOnMapLoadedCallback {
+            if (points.size == 1) {
+                map.animateCamera(CameraUpdateFactory.newLatLngZoom(points.first(), 15f))
+            } else {
+                val b = com.google.android.gms.maps.model.LatLngBounds.Builder()
+                points.forEach(b::include)
+                map.animateCamera(CameraUpdateFactory.newLatLngBounds(b.build(), 150))
+            }
+        }
+    }
 
     if (error != null) {
         Text("Map error: $error", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp))
     }
 }
+
+

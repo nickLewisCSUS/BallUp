@@ -24,6 +24,12 @@ import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.ktx.toObject
 import com.nicklewis.ballup.nav.BallUpApp
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import com.google.android.gms.location.LocationServices
+
+
 // Maps
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.MapView
@@ -160,7 +166,7 @@ fun CourtsMapScreen() {
     var courts by remember { mutableStateOf(listOf<Pair<String, Court>>()) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    // 1) get data
+    // ---- Firestore: load courts ----
     LaunchedEffect(Unit) {
         db.collection("courts")
             .orderBy("name", Query.Direction.ASCENDING)
@@ -170,10 +176,41 @@ fun CourtsMapScreen() {
             }
     }
 
-    // 2) hold onto the GoogleMap instance
+    // ---- Map state ----
+    val context = LocalContext.current
     val mapView = rememberMapViewWithLifecycle()
     var gmap by remember { mutableStateOf<com.google.android.gms.maps.GoogleMap?>(null) }
+    val fused = remember { LocationServices.getFusedLocationProviderClient(context) }
 
+    // ---- Permission launcher ----
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        val granted =
+            (grants[Manifest.permission.ACCESS_FINE_LOCATION] == true) ||
+                    (grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true)
+
+        if (granted) {
+            gmap?.let { map ->
+                enableMyLocation(map, context)
+                centerOnLastKnown(map, fused, context)
+            }
+        }
+    }
+
+    // Ask for permission the first time we show this screen (if needed)
+    LaunchedEffect(Unit) {
+        if (!hasLocationPermission(context)) {
+            permissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
+        }
+    }
+
+    // ---- Map view ----
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = {
@@ -181,12 +218,17 @@ fun CourtsMapScreen() {
             mapView.getMapAsync { m ->
                 m.uiSettings.isZoomControlsEnabled = true
                 gmap = m
+
+                if (hasLocationPermission(context)) {
+                    enableMyLocation(m, context)
+                    centerOnLastKnown(m, fused, context)
+                }
             }
             mapView
         }
     )
 
-    // 3) update markers/camera whenever map or data changes
+    // ---- Markers + camera fit whenever data/map changes ----
     LaunchedEffect(gmap, courts) {
         val map = gmap ?: return@LaunchedEffect
         map.clear()
@@ -208,14 +250,12 @@ fun CourtsMapScreen() {
         }
 
         if (points.isEmpty()) {
-            // only if there are no courts
             val sac = LatLng(38.5816, -121.4944)
             map.moveCamera(CameraUpdateFactory.newLatLngZoom(sac, 12f))
             map.addMarker(MarkerOptions().position(sac).title("Sacramento"))
             return@LaunchedEffect
         }
 
-        // Ensure camera moves AFTER tiles/layout are ready
         map.setOnMapLoadedCallback {
             if (points.size == 1) {
                 map.animateCamera(CameraUpdateFactory.newLatLngZoom(points.first(), 15f))

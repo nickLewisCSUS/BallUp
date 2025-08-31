@@ -1,8 +1,6 @@
 @file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-
 package com.nicklewis.ballup
 
-import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -23,6 +21,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.ktx.toObject
 import com.nicklewis.ballup.nav.BallUpApp
+import androidx.compose.runtime.saveable.rememberSaveable
 
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -166,6 +165,11 @@ fun CourtsMapScreen() {
     var courts by remember { mutableStateOf(listOf<Pair<String, Court>>()) }
     var error by remember { mutableStateOf<String?>(null) }
 
+    var savedCenter by rememberSaveable { mutableStateOf<LatLng?>(null) }
+    var savedZoom   by rememberSaveable { mutableStateOf<Float?>(null) }
+    var userMoved   by rememberSaveable { mutableStateOf(false) }
+    var didAutoFit  by rememberSaveable { mutableStateOf(false) }
+
     // ---- Firestore: load courts ----
     LaunchedEffect(Unit) {
         db.collection("courts")
@@ -219,9 +223,26 @@ fun CourtsMapScreen() {
                 m.uiSettings.isZoomControlsEnabled = true
                 gmap = m
 
+                // Restore camera if we saved it
+                if (savedCenter != null && savedZoom != null) {
+                    m.moveCamera(CameraUpdateFactory.newLatLngZoom(savedCenter!!, savedZoom!!))
+                }
+
+                // Track user-initiated moves (so we don’t auto-fit again)
+                m.setOnCameraMoveStartedListener { reason ->
+                    if (reason == com.google.android.gms.maps.GoogleMap.OnCameraMoveStartedListener.REASON_GESTURE) {
+                        userMoved = true
+                    }
+                }
+                m.setOnCameraIdleListener {
+                    val pos = m.cameraPosition
+                    savedCenter = pos.target
+                    savedZoom = pos.zoom
+                }
+
                 if (hasLocationPermission(context)) {
                     enableMyLocation(m, context)
-                    centerOnLastKnown(m, fused, context)
+                    centerOnLastKnown(m, fused, context) // this does nothing if we already restored above
                 }
             }
             mapView
@@ -249,6 +270,10 @@ fun CourtsMapScreen() {
             }
         }
 
+        // If we have a saved camera (user has seen/used the map before), honor it and bail.
+        if (savedCenter != null && savedZoom != null) return@LaunchedEffect
+
+        // Otherwise, first-time behavior:
         if (points.isEmpty()) {
             val sac = LatLng(38.5816, -121.4944)
             map.moveCamera(CameraUpdateFactory.newLatLngZoom(sac, 12f))
@@ -256,13 +281,17 @@ fun CourtsMapScreen() {
             return@LaunchedEffect
         }
 
-        map.setOnMapLoadedCallback {
-            if (points.size == 1) {
-                map.animateCamera(CameraUpdateFactory.newLatLngZoom(points.first(), 15f))
-            } else {
-                val b = com.google.android.gms.maps.model.LatLngBounds.Builder()
-                points.forEach(b::include)
-                map.animateCamera(CameraUpdateFactory.newLatLngBounds(b.build(), 150))
+        // Only auto-fit once (unless user never touched the map)
+        if (!didAutoFit && !userMoved) {
+            map.setOnMapLoadedCallback {
+                if (points.size == 1) {
+                    map.animateCamera(CameraUpdateFactory.newLatLngZoom(points.first(), 15f))
+                } else {
+                    val b = com.google.android.gms.maps.model.LatLngBounds.Builder()
+                    points.forEach(b::include)
+                    map.animateCamera(CameraUpdateFactory.newLatLngBounds(b.build(), 150))
+                }
+                didAutoFit = true
             }
         }
     }

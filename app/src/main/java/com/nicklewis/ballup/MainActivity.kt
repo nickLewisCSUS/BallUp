@@ -181,6 +181,7 @@ fun CourtsMapScreen() {
     }
 
     // ---- Map state ----
+    var selected by remember { mutableStateOf<Pair<String, Court>?>(null) }
     val context = LocalContext.current
     val mapView = rememberMapViewWithLifecycle()
     var gmap by remember { mutableStateOf<com.google.android.gms.maps.GoogleMap?>(null) }
@@ -223,6 +224,12 @@ fun CourtsMapScreen() {
                 m.uiSettings.isZoomControlsEnabled = true
                 gmap = m
 
+                m.setOnMarkerClickListener { marker ->
+                    (marker.tag as? Pair<String, Court>)?.let { selected = it }
+                    marker.showInfoWindow()
+                    true // consume so camera doesn’t auto-move
+                }
+
                 // Restore camera if we saved it
                 if (savedCenter != null && savedZoom != null) {
                     m.moveCamera(CameraUpdateFactory.newLatLngZoom(savedCenter!!, savedZoom!!))
@@ -255,17 +262,18 @@ fun CourtsMapScreen() {
         map.clear()
 
         val points = mutableListOf<LatLng>()
-        courts.forEach { (_, c) ->
+        courts.forEach { (id, c) ->
             val lat = c.geo?.lat
             val lng = c.geo?.lng
             if (lat != null && lng != null) {
                 val p = LatLng(lat, lng)
-                map.addMarker(
+                val marker = map.addMarker(
                     MarkerOptions()
                         .position(p)
                         .title(c.name.orEmpty())
                         .snippet("${c.type.orEmpty()} • ${c.address.orEmpty()}")
                 )
+                marker?.tag = id to c
                 points += p
             }
         }
@@ -292,6 +300,61 @@ fun CourtsMapScreen() {
                     map.animateCamera(CameraUpdateFactory.newLatLngBounds(b.build(), 150))
                 }
                 didAutoFit = true
+            }
+        }
+    }
+
+    if (selected != null) {
+        val (courtId, court) = selected!!
+        ModalBottomSheet(
+            onDismissRequest = { selected = null },
+            dragHandle = { BottomSheetDefaults.DragHandle() }
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(court.name.orEmpty(), style = MaterialTheme.typography.titleLarge)
+                Text(court.address.orEmpty(), style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    listOfNotNull(
+                        court.type?.uppercase(),
+                        if (court.amenities?.lights == true) "Lights" else null,
+                        if (court.amenities?.restrooms == true) "Restrooms" else null
+                    ).joinToString(" • "),
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(
+                        onClick = {
+                            // create a test run at this court
+                            val run = mapOf(
+                                "courtId" to courtId,
+                                "status" to "active",
+                                "startTime" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
+                                "hostId" to "uid_dev",
+                                "mode" to "5v5",
+                                "maxPlayers" to 10,
+                                "lastHeartbeatAt" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
+                                "playerCount" to 1
+                            )
+                            db.collection("runs")
+                                .add(run)
+                                .addOnSuccessListener { selected = null }
+                        }
+                    ) { Text("Start run here") }
+
+                    val lat = court.geo?.lat
+                    val lng = court.geo?.lng
+                    OutlinedButton(
+                        enabled = lat != null && lng != null,
+                        onClick = {
+                            if (lat != null && lng != null) {
+                                openDirections(context, lat, lng, court.name)
+                            }
+                        }
+                    ) { Text("Directions") }
+                }
+
+                Spacer(Modifier.height(8.dp))
             }
         }
     }

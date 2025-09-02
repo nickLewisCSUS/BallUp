@@ -11,6 +11,8 @@ import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.GoogleMap
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.tasks.CancellationTokenSource
+import android.content.Intent
+import android.net.Uri
 
 private val DEFAULT_LATLNG = LatLng(38.5816, -121.4944) // Sacramento
 
@@ -66,5 +68,11 @@ fun enableMyLocation(map: GoogleMap, ctx: Context) {
     } catch (_: SecurityException) {
         // no-op: permission could still be revoked between check and call
     }
+}
+
+fun openDirections(ctx: Context, lat: Double, lng: Double, label: String?) {
+    // Works with Google Maps or any maps app
+    val uri = Uri.parse("geo:$lat,$lng?q=${lat},${lng}(${Uri.encode(label ?: "Court")})")
+    ctx.startActivity(Intent(Intent.ACTION_VIEW, uri))
 }
 

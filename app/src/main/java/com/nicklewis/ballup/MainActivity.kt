@@ -30,6 +30,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LocationSearching
 import androidx.compose.material3.FilterChip
 import androidx.compose.ui.Alignment
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import com.nicklewis.ballup.firestore.joinRun
+import com.nicklewis.ballup.firestore.leaveRun
+import com.nicklewis.ballup.model.Run
 // Maps
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.MapView
@@ -48,6 +53,8 @@ data class Court(
 )
 data class Geo(var lat: Double? = null, var lng: Double? = null)
 data class Amenities(var lights: Boolean? = null, var restrooms: Boolean? = null)
+
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -78,12 +85,28 @@ fun CourtsScreen(
     var courts by remember { mutableStateOf(listOf<Pair<String, Court>>()) }
     var error by remember { mutableStateOf<String?>(null) }
 
+    val uid = FirebaseAuth.getInstance().currentUser?.uid
+    val scope = rememberCoroutineScope()
+
+    var runs by remember { mutableStateOf(listOf<Pair<String, Run>>()) }
+
     LaunchedEffect(Unit) {
         db.collection("courts")
             .orderBy("name", Query.Direction.ASCENDING)
             .addSnapshotListener { snap, e ->
                 if (e != null) { error = e.message; return@addSnapshotListener }
                 courts = snap?.documents?.map { d -> d.id to (d.toObject<Court>() ?: Court()) }.orEmpty()
+            }
+    }
+
+    LaunchedEffect(Unit) {
+        db.collection("runs")
+            .whereEqualTo("status", "active")
+            .addSnapshotListener { snap, e ->
+                if (e != null) { error = e.message; return@addSnapshotListener }
+                runs = snap?.documents
+                    ?.map { d -> d.id to (d.toObject(Run::class.java) ?: Run()) }
+                    .orEmpty()
             }
     }
 
@@ -125,19 +148,79 @@ fun CourtsScreen(
                         Column(Modifier.padding(12.dp)) {
                             Text(court.name.orEmpty(), style = MaterialTheme.typography.titleMedium)
                             Text("${court.type?.uppercase().orEmpty()} • ${court.address.orEmpty()}")
+
                             val lat = court.geo?.lat
                             val lng = court.geo?.lng
                             if (lat != null && lng != null) {
                                 Text("($lat, $lng)", style = MaterialTheme.typography.bodySmall)
                             }
                             Text("id: $id", style = MaterialTheme.typography.bodySmall)
+
+                            // --- Active run info + actions ---
+                            val currentRunPair = runs.firstOrNull { it.second.courtId == id && it.second.status == "active" }
+                            val runId = currentRunPair?.first
+                            val currentRun = currentRunPair?.second
+
+                            Spacer(Modifier.height(8.dp))
+
+                            if (currentRun == null) {
+                                // No run here yet — let user host one from the list
+                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Button(onClick = {
+                                        val hostId = uid ?: "uid_dev"
+                                        val run = mapOf(
+                                            "courtId" to id,
+                                            "status" to "active",
+                                            "startTime" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
+                                            "hostId" to hostId,
+                                            "mode" to "5v5",
+                                            "maxPlayers" to 10,
+                                            "lastHeartbeatAt" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
+                                            "playerCount" to 1,
+                                            "playerIds" to listOfNotNull(hostId)
+                                        )
+                                        db.collection("runs").add(run)
+                                    }) { Text("Start run") }
+                                }
+                            } else {
+                                // Run exists — show count and join/leave
+                                Text(
+                                    "Pickup running: ${currentRun.playerCount}/${currentRun.maxPlayers}",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Spacer(Modifier.height(6.dp))
+
+                                val alreadyIn = uid != null && (currentRun.playerIds?.contains(uid) == true)
+
+                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    if (!alreadyIn) {
+                                        Button(onClick = {
+                                            if (uid != null && runId != null) {
+                                                scope.launch {
+                                                    try { joinRun(db, runId, uid) }
+                                                    catch (e: Exception) { Log.e("JOIN", "Failed", e) }
+                                                }
+                                            }
+                                        }) { Text("Join") }
+                                    } else {
+                                        OutlinedButton(onClick = {
+                                            if (uid != null && runId != null) {
+                                                scope.launch {
+                                                    try { leaveRun(db, runId, uid) }
+                                                    catch (e: Exception) { Log.e("LEAVE", "Failed", e) }
+                                                }
+                                            }
+                                        }) { Text("Leave") }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
         }
     }
-} // <-- make sure this brace closes CourtsScreen
+}
 
 
 /* -------------------- MAP SCREEN -------------------- */
@@ -167,8 +250,8 @@ private fun rememberMapViewWithLifecycle(): MapView {
 }
 
 
-    @Composable
-    fun CourtsMapScreen(
+@Composable
+fun CourtsMapScreen(
         showIndoor: Boolean,
         showOutdoor: Boolean,
         onToggleIndoor: () -> Unit,
@@ -184,6 +267,8 @@ private fun rememberMapViewWithLifecycle(): MapView {
         var userMoved by rememberSaveable { mutableStateOf(false) }
         var didAutoFit by rememberSaveable { mutableStateOf(false) }
 
+        var runs by remember { mutableStateOf(listOf<Pair<String, Run>>()) }
+
         // Firestore subscription
         LaunchedEffect(Unit) {
             db.collection("courts")
@@ -194,6 +279,19 @@ private fun rememberMapViewWithLifecycle(): MapView {
                     }
                     courts = snap?.documents
                         ?.map { d -> d.id to (d.toObject<Court>() ?: Court()) }
+                        .orEmpty()
+                }
+        }
+
+        LaunchedEffect(Unit) {
+            db.collection("runs")
+                .whereEqualTo("status", "active")
+                .addSnapshotListener { snap, e ->
+                    if (e != null) {
+                        error = e.message; return@addSnapshotListener
+                    }
+                    runs = snap?.documents
+                        ?.map { d -> d.id to (d.toObject(Run::class.java) ?: Run()) }
                         .orEmpty()
                 }
         }
@@ -241,6 +339,10 @@ private fun rememberMapViewWithLifecycle(): MapView {
                         m.uiSettings.isZoomControlsEnabled = true
                         gmap = m
 
+                        m.setOnMapLoadedCallback {
+                            PerfEvents.signalMapLoaded()
+                        }
+
                         m.setOnMarkerClickListener { marker ->
                             (marker.tag as? Pair<String, Court>)?.let { selected = it }
                             marker.showInfoWindow()
@@ -281,7 +383,7 @@ private fun rememberMapViewWithLifecycle(): MapView {
             FloatingActionButton(
                 onClick = { gmap?.let { map -> centerOnLastKnown(map, fused, context) } },
                 modifier = Modifier
-                    .align(Alignment.BottomEnd)
+                    .align(Alignment.BottomStart)
                     .padding(16.dp)
             ) { Icon(Icons.Default.LocationSearching, contentDescription = "My location") }
 
@@ -372,62 +474,103 @@ private fun rememberMapViewWithLifecycle(): MapView {
             }
         }
 
-        // Bottom sheet for selected court
-        if (selected != null) {
-            val (courtId, court) = selected!!
-            ModalBottomSheet(
-                onDismissRequest = { selected = null },
-                dragHandle = { BottomSheetDefaults.DragHandle() }
-            ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(court.name.orEmpty(), style = MaterialTheme.typography.titleLarge)
-                    Text(court.address.orEmpty(), style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        listOfNotNull(
-                            court.type?.uppercase(),
-                            if (court.amenities?.lights == true) "Lights" else null,
-                            if (court.amenities?.restrooms == true) "Restrooms" else null
-                        ).joinToString(" • "),
-                        style = MaterialTheme.typography.bodySmall
-                    )
+    // Bottom sheet for selected court
+    if (selected != null) {
+        val (courtId, court) = selected!!
 
+        val db = FirebaseFirestore.getInstance()
+        val uid = FirebaseAuth.getInstance().currentUser?.uid
+        val scope = rememberCoroutineScope()
+
+        // find active run at this court (if any)
+        val currentRunPair = runs.firstOrNull { it.second.courtId == courtId && it.second.status == "active" }
+        val runId = currentRunPair?.first
+        val currentRun = currentRunPair?.second
+
+        ModalBottomSheet(
+            onDismissRequest = { selected = null },
+            dragHandle = { BottomSheetDefaults.DragHandle() }
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(court.name.orEmpty(), style = MaterialTheme.typography.titleLarge)
+                Text(court.address.orEmpty(), style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    listOfNotNull(
+                        court.type?.uppercase(),
+                        if (court.amenities?.lights == true) "Lights" else null,
+                        if (court.amenities?.restrooms == true) "Restrooms" else null
+                    ).joinToString(" • "),
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                // If no run here yet – host one
+                if (currentRun == null) {
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Button(
-                            onClick = {
-                                val run = mapOf(
-                                    "courtId" to courtId,
-                                    "status" to "active",
-                                    "startTime" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
-                                    "hostId" to "uid_dev",
-                                    "mode" to "5v5",
-                                    "maxPlayers" to 10,
-                                    "lastHeartbeatAt" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
-                                    "playerCount" to 1
-                                )
-                                db.collection("runs")
-                                    .add(run)
-                                    .addOnSuccessListener { selected = null }
-                            }
-                        ) { Text("Start run here") }
+                        Button(onClick = {
+                            val hostId = uid ?: "uid_dev"
+                            val run = mapOf(
+                                "courtId" to courtId,
+                                "status" to "active",
+                                "startTime" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
+                                "hostId" to hostId,
+                                "mode" to "5v5",
+                                "maxPlayers" to 10,
+                                "lastHeartbeatAt" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
+                                "playerCount" to 1,
+                                "playerIds" to listOfNotNull(hostId) // <-- new field
+                            )
+                            db.collection("runs").add(run)
+                                .addOnSuccessListener { selected = null }
+                        }) { Text("Start run here") }
 
-                        val lat = court.geo?.lat
-                        val lng = court.geo?.lng
+                        val lat = court.geo?.lat; val lng = court.geo?.lng
                         OutlinedButton(
                             enabled = lat != null && lng != null,
-                            onClick = {
-                                if (lat != null && lng != null) {
-                                    openDirections(context, lat, lng, court.name)
-                                }
-                            }
+                            onClick = { if (lat != null && lng != null) openDirections(context, lat, lng, court.name) }
                         ) { Text("Directions") }
                     }
+                } else {
+                    // Run exists – show status + join/leave
+                    Text("Pickup running: ${currentRun.playerCount}/${currentRun.maxPlayers}", style = MaterialTheme.typography.bodyMedium)
 
-                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        val alreadyIn = uid != null && (currentRun.playerIds?.contains(uid) == true)
+
+                        if (!alreadyIn) {
+                            Button(onClick = {
+                                if (uid != null && runId != null) {
+                                    scope.launch {
+                                        try { joinRun(db, runId, uid) }
+                                        catch (e: Exception) { Log.e("JOIN", "Failed", e) }
+                                    }
+                                }
+                            }) { Text("Join") }
+                        } else {
+                            OutlinedButton(onClick = {
+                                if (uid != null && runId != null) {
+                                    scope.launch {
+                                        try { leaveRun(db, runId, uid) }
+                                        catch (e: Exception) { Log.e("LEAVE", "Failed", e) }
+                                    }
+                                }
+                            }) { Text("Leave") }
+                        }
+
+                        val lat = court.geo?.lat; val lng = court.geo?.lng
+                        OutlinedButton(
+                            enabled = lat != null && lng != null,
+                            onClick = { if (lat != null && lng != null) openDirections(context, lat, lng, court.name) }
+                        ) { Text("Directions") }
+                    }
                 }
+
+                Spacer(Modifier.height(8.dp))
             }
         }
+    }
 
-        if (error != null) {
+
+    if (error != null) {
             Text(
                 "Map error: $error",
                 color = MaterialTheme.colorScheme.error,

@@ -10,6 +10,7 @@ import com.nicklewis.ballup.CourtsMapScreen
 import com.nicklewis.ballup.CourtsScreen
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.runtime.saveable.rememberSaveable
 import com.nicklewis.ballup.AddCourtDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -17,7 +18,9 @@ import com.nicklewis.ballup.AddCourtDialog
 fun BallUpApp() {
     val nav = rememberNavController()
     val items = listOf(Screen.Map, Screen.List)
-    var showAddCourt by remember { mutableStateOf(false) }   // ← dialog flag
+    var showAddCourt by remember { mutableStateOf(false) }
+    var showIndoor by rememberSaveable { mutableStateOf(true) }
+    var showOutdoor by rememberSaveable { mutableStateOf(true) }
 
     Scaffold(
         topBar = {
@@ -60,8 +63,22 @@ fun BallUpApp() {
             startDestination = Screen.Map.route,
             modifier = Modifier.padding(padding)
         ) {
-            composable(Screen.Map.route)  { CourtsMapScreen() }
-            composable(Screen.List.route) { CourtsScreen() }
+            composable(Screen.Map.route)  {
+                CourtsMapScreen(
+                    showIndoor = showIndoor,
+                    showOutdoor = showOutdoor,
+                    onToggleIndoor = { showIndoor = !showIndoor },
+                    onToggleOutdoor = { showOutdoor = !showOutdoor }
+                )
+            }
+            composable(Screen.List.route) {
+                CourtsScreen(
+                    showIndoor = showIndoor,
+                    showOutdoor = showOutdoor,
+                    onToggleIndoor = { showIndoor = !showIndoor },
+                    onToggleOutdoor = { showOutdoor = !showOutdoor }
+                )
+            }
         }
 
         if (showAddCourt) {

@@ -27,13 +27,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import com.google.android.gms.location.LocationServices
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.LocationSearching
 import androidx.compose.material3.FilterChip
 import androidx.compose.ui.Alignment
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
-import com.nicklewis.ballup.firestore.joinRun
-import com.nicklewis.ballup.firestore.leaveRun
+import com.nicklewis.ballup.firebase.joinRun
+import com.nicklewis.ballup.firebase.leaveRun
 import com.nicklewis.ballup.model.Run
 // Maps
 import com.google.android.gms.maps.CameraUpdateFactory
@@ -42,6 +43,11 @@ import com.google.android.gms.maps.MapsInitializer
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.MarkerOptions
 import com.google.firebase.auth.FirebaseAuth
+import com.nicklewis.ballup.firebase.endRun
+import com.nicklewis.ballup.firebase.kickPlayer
+import com.nicklewis.ballup.firebase.updateMaxPlayers
+import com.nicklewis.ballup.firebase.updateMode
+
 data class Court(
     var name: String? = null,
     var type: String? = null,
@@ -249,7 +255,47 @@ private fun rememberMapViewWithLifecycle(): MapView {
     return mapView
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AttendeeChips(
+    currentRun: Run,
+    isHost: Boolean,
+    runId: String?,
+    uid: String?
+) {
+    val scope = rememberCoroutineScope()
+    val db = FirebaseFirestore.getInstance()
 
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        currentRun.playerIds.orEmpty().forEach { pid ->
+            AssistChip(
+                onClick = { /* later: open profile */ },
+                label = {
+                    val tag = if (pid == currentRun.hostId) "Host • " else ""
+                    Text(tag + pid.takeLast(6))
+                },
+                trailingIcon = if (isHost && pid != currentRun.hostId) {
+                    {
+                        IconButton(
+                            onClick = {
+                                if (runId != null && uid != null) {
+                                    scope.launch {
+                                        try { kickPlayer(db, runId, uid, pid) }
+                                        catch (e: Exception) { Log.e("RUN", "kick", e) }
+                                    }
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = "Kick")
+                        }
+                    }
+                } else null
+            )
+        }
+    }
+
+    Spacer(Modifier.height(8.dp))
+}
 @Composable
 fun CourtsMapScreen(
         showIndoor: Boolean,
@@ -530,8 +576,18 @@ fun CourtsMapScreen(
                         ) { Text("Directions") }
                     }
                 } else {
-                    // Run exists – show status + join/leave
-                    Text("Pickup running: ${currentRun.playerCount}/${currentRun.maxPlayers}", style = MaterialTheme.typography.bodyMedium)
+                    // ---------------- Run exists — info + join/leave + host controls ----------------
+                    Text(
+                        "Pickup running: ${currentRun.playerCount}/${currentRun.maxPlayers}",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+
+                    AttendeeChips(
+                        currentRun = currentRun,
+                        isHost = (uid != null && currentRun.hostId == uid),
+                        runId = runId,
+                        uid = uid
+                    )
 
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         val alreadyIn = uid != null && (currentRun.playerIds?.contains(uid) == true)
@@ -562,13 +618,80 @@ fun CourtsMapScreen(
                             onClick = { if (lat != null && lng != null) openDirections(context, lat, lng, court.name) }
                         ) { Text("Directions") }
                     }
+
+                    // --- Host controls (only when you're the host and run is active) ---
+                    val isHost = uid != null && currentRun.hostId == uid
+                    if (isHost && currentRun.status == "active" && runId != null && uid != null) {
+                        Divider()
+                        Text("Host controls", style = MaterialTheme.typography.titleSmall)
+
+                        // Mode selector
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf("3v3","4v4","5v5").forEach { m ->
+                                FilterChip(
+                                    selected = currentRun.mode == m,
+                                    onClick = {
+                                        scope.launch {
+                                            try { updateMode(db, runId, uid, m) }
+                                            catch (e: Exception) { Log.e("RUN", "mode", e) }
+                                        }
+                                    },
+                                    label = { Text(m) }
+                                )
+                            }
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+
+                        // Capacity stepper
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text("Capacity: ${currentRun.playerCount}/${currentRun.maxPlayers}")
+                            OutlinedButton(
+                                enabled = currentRun.maxPlayers > currentRun.playerCount,
+                                onClick = {
+                                    scope.launch {
+                                        try { updateMaxPlayers(db, runId, uid, (currentRun.maxPlayers - 2).coerceAtLeast(currentRun.playerCount)) }
+                                        catch (e: Exception) { Log.e("RUN", "cap-", e) }
+                                    }
+                                }
+                            ) { Text("-2") }
+
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch {
+                                        try { updateMaxPlayers(db, runId, uid, currentRun.maxPlayers + 2) }
+                                        catch (e: Exception) { Log.e("RUN", "cap+", e) }
+                                    }
+                                }
+                            ) { Text("+2") }
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+
+                        // End run
+                        Button(
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer
+                            ),
+                            onClick = {
+                                scope.launch {
+                                    try { endRun(db, runId, uid) }
+                                    catch (e: Exception) { Log.e("RUN", "end", e) }
+                                }
+                            }
+                        ) { Text("End run") }
+                    }
+                    // -------------------------------------------------------------------
                 }
+
 
                 Spacer(Modifier.height(8.dp))
             }
         }
     }
-
 
     if (error != null) {
             Text(

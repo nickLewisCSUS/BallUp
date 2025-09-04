@@ -20,7 +20,7 @@ local.properties
 Thumbs.db
 
 # Google Services (secrets)
-google-services.json
+/google-services.json
 
 # Keystore files (DON'T commit your signing keys)
 *.jks

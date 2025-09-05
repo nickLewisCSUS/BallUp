@@ -36,7 +36,9 @@ import kotlinx.coroutines.launch
 import com.nicklewis.ballup.firebase.joinRun
 import com.nicklewis.ballup.firebase.leaveRun
 import com.nicklewis.ballup.model.Run
-// Maps
+import com.nicklewis.ballup.util.SortMode
+import com.nicklewis.ballup.util.hasLocationPermission
+import com.nicklewis.ballup.util.fetchLastKnownLocation
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.MapView
 import com.google.android.gms.maps.MapsInitializer
@@ -47,6 +49,11 @@ import com.nicklewis.ballup.firebase.endRun
 import com.nicklewis.ballup.firebase.kickPlayer
 import com.nicklewis.ballup.firebase.updateMaxPlayers
 import com.nicklewis.ballup.firebase.updateMode
+import com.nicklewis.ballup.util.centerOnLastKnown
+import com.nicklewis.ballup.util.distanceKm
+import com.nicklewis.ballup.util.enableMyLocation
+import com.nicklewis.ballup.util.kmToMiles
+import com.nicklewis.ballup.util.openDirections
 
 data class Court(
     var name: String? = null,
@@ -116,6 +123,35 @@ fun CourtsScreen(
             }
     }
 
+    var sortMode by rememberSaveable { mutableStateOf(SortMode.CLOSEST) }
+    val context = LocalContext.current
+    val fused = remember { LocationServices.getFusedLocationProviderClient(context) }
+    var userLoc by remember { mutableStateOf<LatLng?>(null) }
+
+    // ask for permission then grab last known location
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        val granted = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (granted) {
+            fetchLastKnownLocation(fused) { loc -> userLoc = loc }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (hasLocationPermission(context)) {
+            fetchLastKnownLocation(fused) { loc -> userLoc = loc }
+        } else {
+            permissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
+        }
+    }
+
     val filtered = courts.filter { (_, c) ->
         when (c.type?.trim()?.lowercase()) {
             "indoor"  -> showIndoor
@@ -139,85 +175,111 @@ fun CourtsScreen(
             }
         }
 
+        Row(
+            Modifier.padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilterChip(selected = sortMode == SortMode.CLOSEST,      onClick = { sortMode = SortMode.CLOSEST },      label = { Text("Closest") })
+            FilterChip(selected = sortMode == SortMode.MOST_PLAYERS, onClick = { sortMode = SortMode.MOST_PLAYERS }, label = { Text("Most players") })
+            FilterChip(selected = sortMode == SortMode.NEWEST,       onClick = { sortMode = SortMode.NEWEST },       label = { Text("Newest") })
+        }
+
         if (error != null) Text("Error: $error", color = MaterialTheme.colorScheme.error)
         if (courts.isEmpty()) Text("No courts yet. Add one in Firestore to see it here.")
 
         if (filtered.isEmpty()) {
             Text("No courts match your filter.")
         } else {
+
+            // Map: courtId -> (runId, Run)
+            val activeByCourtId: Map<String, Pair<String, Run>> = remember(runs) {
+                runs
+                    .asSequence()
+                    .filter { it.second.status == "active" }
+                    .mapNotNull { pair ->
+                        val courtId = pair.second.courtId
+                        if (courtId != null) courtId to pair else null
+                    }
+                    .toMap()
+            }
+
+            // Triple: (courtId, court, (runId, Run)?)
+            val filteredWithRuns: List<Triple<String, Court, Pair<String, Run>?>> =
+                filtered.map { (courtId, court) ->
+                    Triple(courtId, court, activeByCourtId[courtId])
+                }
+
+            val sortedWithRuns: List<Triple<String, Court, Pair<String, Run>?>> = when (sortMode) {
+                SortMode.CLOSEST -> filteredWithRuns.sortedBy { (_, c, _) ->
+                    val lat = c.geo?.lat; val lng = c.geo?.lng
+                    if (lat != null && lng != null && userLoc != null)
+                        distanceKm(userLoc!!.latitude, userLoc!!.longitude, lat, lng)
+                    else Double.POSITIVE_INFINITY
+                }
+                SortMode.MOST_PLAYERS -> filteredWithRuns.sortedByDescending { it.third?.second?.playerCount ?: 0 }
+                SortMode.NEWEST       -> filteredWithRuns.sortedByDescending { it.third?.second?.startTime?.toDate()?.time ?: 0L }
+            }
+
             LazyColumn(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
+
             ) {
-                items(filtered) { (id, court) ->
+                items(sortedWithRuns, key = { it.first }) { (courtId, court, activePair) ->
+                    val runId: String? = activePair?.first
+                    val currentRun: Run? = activePair?.second
                     ElevatedCard {
                         Column(Modifier.padding(12.dp)) {
-                            Text(court.name.orEmpty(), style = MaterialTheme.typography.titleMedium)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(court.name.orEmpty(), style = MaterialTheme.typography.titleMedium)
+                                if (currentRun != null) {
+                                    AssistChip(onClick = {}, label = { Text("Active now") })
+                                }
+                            }
+                            Text("${court.type?.uppercase().orEmpty()} • ${court.address.orEmpty()}")
                             Text("${court.type?.uppercase().orEmpty()} • ${court.address.orEmpty()}")
 
-                            val lat = court.geo?.lat
-                            val lng = court.geo?.lng
-                            if (lat != null && lng != null) {
-                                Text("($lat, $lng)", style = MaterialTheme.typography.bodySmall)
+                            // (Optional) show distance if we have it
+                            val lat = court.geo?.lat; val lng = court.geo?.lng
+                            if (lat != null && lng != null && userLoc != null) {
+                                val mi = kmToMiles(distanceKm(userLoc!!.latitude, userLoc!!.longitude, lat, lng))
+                                Text(String.format("%.1f mi away", mi), style = MaterialTheme.typography.bodySmall)
                             }
-                            Text("id: $id", style = MaterialTheme.typography.bodySmall)
-
-                            // --- Active run info + actions ---
-                            val currentRunPair = runs.firstOrNull { it.second.courtId == id && it.second.status == "active" }
-                            val runId = currentRunPair?.first
-                            val currentRun = currentRunPair?.second
 
                             Spacer(Modifier.height(8.dp))
 
+                            // --- Active run info + actions (use currentRun directly) ---
                             if (currentRun == null) {
-                                // No run here yet — let user host one from the list
-                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    Button(onClick = {
-                                        val hostId = uid ?: "uid_dev"
-                                        val run = mapOf(
-                                            "courtId" to id,
-                                            "status" to "active",
-                                            "startTime" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
-                                            "hostId" to hostId,
-                                            "mode" to "5v5",
-                                            "maxPlayers" to 10,
-                                            "lastHeartbeatAt" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
-                                            "playerCount" to 1,
-                                            "playerIds" to listOfNotNull(hostId)
-                                        )
-                                        db.collection("runs").add(run)
-                                    }) { Text("Start run") }
-                                }
+                                Button(onClick = {
+                                    val hostId = uid ?: "uid_dev"
+                                    val run = mapOf(
+                                        "courtId" to courtId,
+                                        "status" to "active",
+                                        "startTime" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
+                                        "hostId" to hostId,
+                                        "mode" to "5v5",
+                                        "maxPlayers" to 10,
+                                        "lastHeartbeatAt" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
+                                        "playerCount" to 1,
+                                        "playerIds" to listOfNotNull(hostId)
+                                    )
+                                    db.collection("runs").add(run)
+                                }) { Text("Start run") }
                             } else {
-                                // Run exists — show count and join/leave
-                                Text(
-                                    "Pickup running: ${currentRun.playerCount}/${currentRun.maxPlayers}",
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                                Spacer(Modifier.height(6.dp))
-
                                 val alreadyIn = uid != null && (currentRun.playerIds?.contains(uid) == true)
 
-                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    if (!alreadyIn) {
-                                        Button(onClick = {
-                                            if (uid != null && runId != null) {
-                                                scope.launch {
-                                                    try { joinRun(db, runId, uid) }
-                                                    catch (e: Exception) { Log.e("JOIN", "Failed", e) }
-                                                }
-                                            }
-                                        }) { Text("Join") }
-                                    } else {
-                                        OutlinedButton(onClick = {
-                                            if (uid != null && runId != null) {
-                                                scope.launch {
-                                                    try { leaveRun(db, runId, uid) }
-                                                    catch (e: Exception) { Log.e("LEAVE", "Failed", e) }
-                                                }
-                                            }
-                                        }) { Text("Leave") }
-                                    }
+                                if (!alreadyIn) {
+                                    Button(onClick = {
+                                        if (uid != null && runId != null) {
+                                            scope.launch { try { joinRun(db, runId, uid) } catch (e: Exception) { Log.e("JOIN", "Failed", e) } }
+                                        }
+                                    }) { Text("Join") }
+                                } else {
+                                    OutlinedButton(onClick = {
+                                        if (uid != null && runId != null) {
+                                            scope.launch { try { leaveRun(db, runId, uid) } catch (e: Exception) { Log.e("LEAVE", "Failed", e) } }
+                                        }
+                                    }) { Text("Leave") }
                                 }
                             }
                         }
@@ -227,7 +289,6 @@ fun CourtsScreen(
         }
     }
 }
-
 
 /* -------------------- MAP SCREEN -------------------- */
 // MapView that follows the Compose lifecycle
@@ -460,7 +521,7 @@ fun CourtsMapScreen(
         }
 
         // Markers + camera fit react to filters too
-        LaunchedEffect(gmap, courts, showIndoor, showOutdoor) {
+        LaunchedEffect(gmap, courts, runs, showIndoor, showOutdoor) {
             val map = gmap ?: return@LaunchedEffect
             map.clear()
 
@@ -472,23 +533,27 @@ fun CourtsMapScreen(
                 }
             }
 
-            // if the selected court is now filtered out, close the sheet
-            if (selected != null && filtered.none { it.first == selected!!.first }) {
-                selected = null
-            }
-
             val points = mutableListOf<LatLng>()
             filtered.forEach { (id, c) ->
-                val lat = c.geo?.lat
-                val lng = c.geo?.lng
+                val lat = c.geo?.lat; val lng = c.geo?.lng
                 if (lat != null && lng != null) {
                     val p = LatLng(lat, lng)
-                    val mk = map.addMarker(
-                        MarkerOptions()
-                            .position(p)
-                            .title(c.name.orEmpty())
-                            .snippet("${c.type.orEmpty()} • ${c.address.orEmpty()}")
-                    )
+                    val hasActive = runs.any { it.second.courtId == id && it.second.status == "active" }
+
+                    val opts = MarkerOptions()
+                        .position(p)
+                        .title(c.name.orEmpty())
+                        .snippet("${c.type.orEmpty()} • ${c.address.orEmpty()}")
+
+                    if (hasActive) {
+                        opts.icon(
+                            com.google.android.gms.maps.model.BitmapDescriptorFactory.defaultMarker(
+                                com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_GREEN
+                            )
+                        )
+                    }
+
+                    val mk = map.addMarker(opts)
                     mk?.tag = id to c
                     points += p
                 }
@@ -572,7 +637,13 @@ fun CourtsMapScreen(
                         val lat = court.geo?.lat; val lng = court.geo?.lng
                         OutlinedButton(
                             enabled = lat != null && lng != null,
-                            onClick = { if (lat != null && lng != null) openDirections(context, lat, lng, court.name) }
+                            onClick = { if (lat != null && lng != null) openDirections(
+                                context,
+                                lat,
+                                lng,
+                                court.name
+                            )
+                            }
                         ) { Text("Directions") }
                     }
                 } else {
@@ -615,7 +686,13 @@ fun CourtsMapScreen(
                         val lat = court.geo?.lat; val lng = court.geo?.lng
                         OutlinedButton(
                             enabled = lat != null && lng != null,
-                            onClick = { if (lat != null && lng != null) openDirections(context, lat, lng, court.name) }
+                            onClick = { if (lat != null && lng != null) openDirections(
+                                context,
+                                lat,
+                                lng,
+                                court.name
+                            )
+                            }
                         ) { Text("Directions") }
                     }
 
@@ -650,11 +727,15 @@ fun CourtsMapScreen(
                         ) {
                             Text("Capacity: ${currentRun.playerCount}/${currentRun.maxPlayers}")
                             OutlinedButton(
-                                enabled = currentRun.maxPlayers > currentRun.playerCount,
+                                enabled = currentRun.maxPlayers - 2 >= currentRun.playerCount,
                                 onClick = {
                                     scope.launch {
-                                        try { updateMaxPlayers(db, runId, uid, (currentRun.maxPlayers - 2).coerceAtLeast(currentRun.playerCount)) }
-                                        catch (e: Exception) { Log.e("RUN", "cap-", e) }
+                                        try {
+                                            updateMaxPlayers(
+                                                db, runId, uid,
+                                                (currentRun.maxPlayers - 2).coerceAtLeast(currentRun.playerCount)
+                                            )
+                                        } catch (e: Exception) { Log.e("RUN", "cap-", e) }
                                     }
                                 }
                             ) { Text("-2") }

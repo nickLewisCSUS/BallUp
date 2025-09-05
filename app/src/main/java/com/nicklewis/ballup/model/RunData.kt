@@ -1,13 +1,17 @@
 package com.nicklewis.ballup.model
 
+import com.google.firebase.firestore.DocumentId
+
 data class Run(
-    var courtId: String = "",
-    var status: String = "active",
-    var hostId: String = "",
-    var mode: String = "5v5",
+    @DocumentId var id: String? = null,
+    var courtId: String? = null,
+    var status: String? = null,
+    var hostId: String? = null,
+    var mode: String? = null,
     var maxPlayers: Int = 10,
-    var playerIds: List<String>? = null,   // nullable for older docs
     var playerCount: Int = 0,
+    var playerIds: List<String>? = null,
     var startTime: com.google.firebase.Timestamp? = null,
-    var lastHeartbeatAt: com.google.firebase.Timestamp? = null
+    var lastHeartbeatAt: com.google.firebase.Timestamp? = null,
+    var endedAt: com.google.firebase.Timestamp? = null
 )

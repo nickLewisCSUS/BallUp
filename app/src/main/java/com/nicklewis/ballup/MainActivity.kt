@@ -42,6 +42,9 @@ import com.nicklewis.ballup.util.fetchLastKnownLocation
 import com.nicklewis.ballup.ui.theme.SortBar
 import com.nicklewis.ballup.util.CourtRow
 import com.nicklewis.ballup.util.buildSortedCourtRows
+import com.nicklewis.ballup.ui.theme.FilterMenu
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.nicklewis.ballup.map.MapCameraVM
 
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.MapView
@@ -165,21 +168,16 @@ fun CourtsScreen(
     }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Surface(
-            tonalElevation = 2.dp,
-            shape = MaterialTheme.shapes.large,
-            modifier = Modifier.padding(bottom = 12.dp)
-        ) {
-            Row(
-                Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(selected = showIndoor,  onClick = onToggleIndoor,  label = { Text("Indoor") })
-                FilterChip(selected = showOutdoor, onClick = onToggleOutdoor, label = { Text("Outdoor") })
-            }
-        }
 
-        SortBar(sortMode = sortMode, onChange = { sortMode = it })
+        FilterMenu(
+            showIndoor = showIndoor,
+            showOutdoor = showOutdoor,
+            sortMode = sortMode,
+            onToggleIndoor = onToggleIndoor,
+            onToggleOutdoor = onToggleOutdoor,
+            onSortChange = { sortMode = it },
+            modifier = Modifier.padding(bottom = 12.dp)
+        )
 
         if (error != null) Text("Error: $error", color = MaterialTheme.colorScheme.error)
         if (courts.isEmpty()) Text("No courts yet. Add one in Firestore to see it here.")
@@ -349,12 +347,15 @@ fun CourtsMapScreen(
         var error by remember { mutableStateOf<String?>(null) }
 
         // camera + UX state we keep here (not hoisted)
-        var savedCenter by rememberSaveable { mutableStateOf<LatLng?>(null) }
-        var savedZoom by rememberSaveable { mutableStateOf<Float?>(null) }
+        val cam: MapCameraVM = viewModel()   // scoped to this destination/back stack entry
+        var savedCenter by cam.center
+        var savedZoom   by cam.zoom
         var userMoved by rememberSaveable { mutableStateOf(false) }
         var didAutoFit by rememberSaveable { mutableStateOf(false) }
 
         var runs by remember { mutableStateOf(listOf<Pair<String, Run>>()) }
+
+
 
         // Firestore subscription
         LaunchedEffect(Unit) {
@@ -399,7 +400,9 @@ fun CourtsMapScreen(
             if (granted) {
                 gmap?.let { map ->
                     enableMyLocation(map, context)
-                    centerOnLastKnown(map, fused, context)
+                    if (savedCenter == null || savedZoom == null) {
+                        centerOnLastKnown(map, fused, context) // only first time
+                    }
                 }
             }
         }
@@ -426,24 +429,19 @@ fun CourtsMapScreen(
                         m.uiSettings.isZoomControlsEnabled = true
                         gmap = m
 
-                        m.setOnMapLoadedCallback {
-                            PerfEvents.signalMapLoaded()
-                        }
-
                         m.setOnMarkerClickListener { marker ->
                             (marker.tag as? Pair<String, Court>)?.let { selected = it }
-                            marker.showInfoWindow()
-                            true
+                            marker.showInfoWindow(); true
                         }
 
-                        // restore camera if we have it
+                        // Restore camera if we have it; otherwise only then center to user
+                        if (hasLocationPermission(context)) {
+                            enableMyLocation(m, context)
+                        }
                         if (savedCenter != null && savedZoom != null) {
-                            m.moveCamera(
-                                CameraUpdateFactory.newLatLngZoom(
-                                    savedCenter!!,
-                                    savedZoom!!
-                                )
-                            )
+                            m.moveCamera(CameraUpdateFactory.newLatLngZoom(savedCenter!!, savedZoom!!))
+                        } else if (hasLocationPermission(context)) {
+                            centerOnLastKnown(m, fused, context)   // <-- first time only
                         }
 
                         m.setOnCameraMoveStartedListener { reason ->
@@ -455,11 +453,6 @@ fun CourtsMapScreen(
                             val pos = m.cameraPosition
                             savedCenter = pos.target
                             savedZoom = pos.zoom
-                        }
-
-                        if (hasLocationPermission(context)) {
-                            enableMyLocation(m, context)
-                            centerOnLastKnown(m, fused, context)
                         }
                     }
                     mapView

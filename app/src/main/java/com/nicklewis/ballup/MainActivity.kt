@@ -39,6 +39,10 @@ import com.nicklewis.ballup.model.Run
 import com.nicklewis.ballup.util.SortMode
 import com.nicklewis.ballup.util.hasLocationPermission
 import com.nicklewis.ballup.util.fetchLastKnownLocation
+import com.nicklewis.ballup.ui.theme.SortBar
+import com.nicklewis.ballup.util.CourtRow
+import com.nicklewis.ballup.util.buildSortedCourtRows
+
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.MapView
 import com.google.android.gms.maps.MapsInitializer
@@ -175,14 +179,7 @@ fun CourtsScreen(
             }
         }
 
-        Row(
-            Modifier.padding(vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FilterChip(selected = sortMode == SortMode.CLOSEST,      onClick = { sortMode = SortMode.CLOSEST },      label = { Text("Closest") })
-            FilterChip(selected = sortMode == SortMode.MOST_PLAYERS, onClick = { sortMode = SortMode.MOST_PLAYERS }, label = { Text("Most players") })
-            FilterChip(selected = sortMode == SortMode.NEWEST,       onClick = { sortMode = SortMode.NEWEST },       label = { Text("Newest") })
-        }
+        SortBar(sortMode = sortMode, onChange = { sortMode = it })
 
         if (error != null) Text("Error: $error", color = MaterialTheme.colorScheme.error)
         if (courts.isEmpty()) Text("No courts yet. Add one in Firestore to see it here.")
@@ -191,55 +188,39 @@ fun CourtsScreen(
             Text("No courts match your filter.")
         } else {
 
-            // Map: courtId -> (runId, Run)
-            val activeByCourtId: Map<String, Pair<String, Run>> = remember(runs) {
-                runs
-                    .asSequence()
-                    .filter { it.second.status == "active" }
-                    .mapNotNull { pair ->
-                        val courtId = pair.second.courtId
-                        if (courtId != null) courtId to pair else null
-                    }
-                    .toMap()
-            }
-
-            // Triple: (courtId, court, (runId, Run)?)
-            val filteredWithRuns: List<Triple<String, Court, Pair<String, Run>?>> =
-                filtered.map { (courtId, court) ->
-                    Triple(courtId, court, activeByCourtId[courtId])
-                }
-
-            val sortedWithRuns: List<Triple<String, Court, Pair<String, Run>?>> = when (sortMode) {
-                SortMode.CLOSEST -> filteredWithRuns.sortedBy { (_, c, _) ->
-                    val lat = c.geo?.lat; val lng = c.geo?.lng
-                    if (lat != null && lng != null && userLoc != null)
-                        distanceKm(userLoc!!.latitude, userLoc!!.longitude, lat, lng)
-                    else Double.POSITIVE_INFINITY
-                }
-                SortMode.MOST_PLAYERS -> filteredWithRuns.sortedByDescending { it.third?.second?.playerCount ?: 0 }
-                SortMode.NEWEST       -> filteredWithRuns.sortedByDescending { it.third?.second?.startTime?.toDate()?.time ?: 0L }
+            val rows: List<CourtRow> = remember(filtered, runs, sortMode, userLoc) {
+                buildSortedCourtRows(filtered, runs, sortMode, userLoc)
             }
 
             LazyColumn(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
-
             ) {
-                items(sortedWithRuns, key = { it.first }) { (courtId, court, activePair) ->
-                    val runId: String? = activePair?.first
-                    val currentRun: Run? = activePair?.second
+                items(rows, key = { it.courtId }) { row ->
+                    val courtId = row.courtId
+                    val court = row.court
+                    val runId = row.active?.first
+                    val currentRun = row.active?.second
+
                     ElevatedCard {
                         Column(Modifier.padding(12.dp)) {
+                            // Header with status chip
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text(court.name.orEmpty(), style = MaterialTheme.typography.titleMedium)
-                                if (currentRun != null) {
-                                    AssistChip(onClick = {}, label = { Text("Active now") })
+                                currentRun?.let { r ->
+                                    val open = (r.maxPlayers - r.playerCount).coerceAtLeast(0)
+                                    val label = when {
+                                        open > 0 -> "Open • $open left"
+                                        r.playerCount >= r.maxPlayers -> "Full"
+                                        else -> "Active"
+                                    }
+                                    AssistChip(onClick = {}, label = { Text(label) })
                                 }
                             }
-                            Text("${court.type?.uppercase().orEmpty()} • ${court.address.orEmpty()}")
+
                             Text("${court.type?.uppercase().orEmpty()} • ${court.address.orEmpty()}")
 
-                            // (Optional) show distance if we have it
+                            // distance (optional)
                             val lat = court.geo?.lat; val lng = court.geo?.lng
                             if (lat != null && lng != null && userLoc != null) {
                                 val mi = kmToMiles(distanceKm(userLoc!!.latitude, userLoc!!.longitude, lat, lng))
@@ -248,7 +229,7 @@ fun CourtsScreen(
 
                             Spacer(Modifier.height(8.dp))
 
-                            // --- Active run info + actions (use currentRun directly) ---
+                            // Actions
                             if (currentRun == null) {
                                 Button(onClick = {
                                     val hostId = uid ?: "uid_dev"
@@ -267,7 +248,6 @@ fun CourtsScreen(
                                 }) { Text("Start run") }
                             } else {
                                 val alreadyIn = uid != null && (currentRun.playerIds?.contains(uid) == true)
-
                                 if (!alreadyIn) {
                                     Button(onClick = {
                                         if (uid != null && runId != null) {

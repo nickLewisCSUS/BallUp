@@ -25,6 +25,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import com.google.android.gms.location.LocationServices
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -39,12 +40,14 @@ import com.nicklewis.ballup.model.Run
 import com.nicklewis.ballup.util.SortMode
 import com.nicklewis.ballup.util.hasLocationPermission
 import com.nicklewis.ballup.util.fetchLastKnownLocation
-import com.nicklewis.ballup.ui.theme.SortBar
 import com.nicklewis.ballup.util.CourtRow
 import com.nicklewis.ballup.util.buildSortedCourtRows
 import com.nicklewis.ballup.ui.theme.FilterMenu
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.nicklewis.ballup.map.MapCameraVM
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Close
+
 
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.MapView
@@ -104,11 +107,11 @@ fun CourtsScreen(
     val db = remember { FirebaseFirestore.getInstance() }
     var courts by remember { mutableStateOf(listOf<Pair<String, Court>>()) }
     var error by remember { mutableStateOf<String?>(null) }
-
     val uid = FirebaseAuth.getInstance().currentUser?.uid
     val scope = rememberCoroutineScope()
-
     var runs by remember { mutableStateOf(listOf<Pair<String, Run>>()) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var searchActive by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         db.collection("courts")
@@ -167,7 +170,75 @@ fun CourtsScreen(
         }
     }
 
+    // apply the search query
+    val filteredByQuery = remember(filtered, query) {
+        if (query.isBlank()) filtered
+        else {
+            val t = query.trim().lowercase()
+            filtered.filter { (_, c) ->
+                c.name.orEmpty().lowercase().contains(t) ||
+                        c.address.orEmpty().lowercase().contains(t) ||
+                        c.type.orEmpty().lowercase().contains(t)
+            }
+        }
+    }
+
+    // Build sorted rows from the query-filtered list
+    val rows: List<CourtRow> = remember(filteredByQuery, runs, sortMode, userLoc) {
+        buildSortedCourtRows(filteredByQuery, runs, sortMode, userLoc)
+    }
+
+    // Build your suggestions (whatever you want shown)
+    val suggestions = remember(query, filtered) {
+        if (query.isBlank()) emptyList()
+        else filtered
+            .map { it.second.name.orEmpty() }
+            .filter { it.contains(query, ignoreCase = true) }
+            .distinct()
+            .take(5)
+    }
+    val showSuggestions = searchActive && suggestions.isNotEmpty()
+
     Column(Modifier.fillMaxSize().padding(16.dp)) {
+
+        DockedSearchBar(
+            query = query,
+            onQueryChange = { query = it },
+            onSearch = {
+                searchActive = false
+            },
+            active = showSuggestions,
+            onActiveChange = { isActive ->
+                searchActive = isActive
+            },
+            placeholder = { Text("Search courts or addresses") },
+            leadingIcon = { Icon(Icons.Filled.Search, null) },
+            trailingIcon = {
+                if (query.isNotEmpty()) {
+                    IconButton(onClick = { query = "" }) {
+                        Icon(Icons.Filled.Close, contentDescription = "Clear")
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+        ) {
+            if (showSuggestions) {
+                LazyColumn {
+                    items(suggestions) { s ->
+                        ListItem(
+                            headlineContent = { Text(s) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    query = s
+                                    searchActive = false
+                                }
+                        )
+                        Divider()
+                    }
+                }
+            }
+        }
 
         FilterMenu(
             showIndoor = showIndoor,
@@ -182,16 +253,11 @@ fun CourtsScreen(
         if (error != null) Text("Error: $error", color = MaterialTheme.colorScheme.error)
         if (courts.isEmpty()) Text("No courts yet. Add one in Firestore to see it here.")
 
-        if (filtered.isEmpty()) {
+        if (rows.isEmpty()) {
             Text("No courts match your filter.")
         } else {
-
-            val rows: List<CourtRow> = remember(filtered, runs, sortMode, userLoc) {
-                buildSortedCourtRows(filtered, runs, sortMode, userLoc)
-            }
-
             LazyColumn(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).heightIn(max = 200.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(rows, key = { it.courtId }) { row ->
@@ -202,7 +268,6 @@ fun CourtsScreen(
 
                     ElevatedCard {
                         Column(Modifier.padding(12.dp)) {
-                            // Header with status chip
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text(court.name.orEmpty(), style = MaterialTheme.typography.titleMedium)
                                 currentRun?.let { r ->
@@ -218,7 +283,6 @@ fun CourtsScreen(
 
                             Text("${court.type?.uppercase().orEmpty()} • ${court.address.orEmpty()}")
 
-                            // distance (optional)
                             val lat = court.geo?.lat; val lng = court.geo?.lng
                             if (lat != null && lng != null && userLoc != null) {
                                 val mi = kmToMiles(distanceKm(userLoc!!.latitude, userLoc!!.longitude, lat, lng))
@@ -227,7 +291,6 @@ fun CourtsScreen(
 
                             Spacer(Modifier.height(8.dp))
 
-                            // Actions
                             if (currentRun == null) {
                                 Button(onClick = {
                                     val hostId = uid ?: "uid_dev"

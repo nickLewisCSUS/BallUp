@@ -10,6 +10,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestore
+import com.nicklewis.ballup.model.Amenities
+import com.nicklewis.ballup.model.Court
+import com.nicklewis.ballup.model.Geo
 
 @Composable
 fun AddCourtDialog(

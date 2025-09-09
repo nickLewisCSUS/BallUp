@@ -1,0 +1,15 @@
+package com.nicklewis.ballup.model
+
+import com.google.firebase.Timestamp
+
+data class Run(
+    var courtId: String? = null,
+    var status: String = "active", // or "ended"
+    var startTime: Timestamp? = null,
+    var hostId: String? = null,
+    var mode: String = "5v5",
+    var maxPlayers: Int = 10,
+    var lastHeartbeatAt: Timestamp? = null,
+    var playerCount: Int = 0,
+    var playerIds: List<String>? = emptyList()
+)

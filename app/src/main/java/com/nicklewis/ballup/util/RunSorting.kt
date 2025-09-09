@@ -1,7 +1,7 @@
 package com.nicklewis.ballup.util
 
 import com.google.android.gms.maps.model.LatLng
-import com.nicklewis.ballup.Court
+import com.nicklewis.ballup.model.Court
 import com.nicklewis.ballup.model.Run
 
 data class CourtRow(

@@ -26,7 +26,8 @@ import com.nicklewis.ballup.ui.courts.components.FilterBar
 import android.Manifest
 import com.nicklewis.ballup.util.fetchLastKnownLocation
 import com.nicklewis.ballup.util.hasLocationPermission
-
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.nicklewis.ballup.vm.StarsViewModel
 
 
 @Composable
@@ -36,6 +37,8 @@ fun CourtsListScreen(
     onJoinRun: (runId: String) -> Unit,
     onLeaveRun: (runId: String) -> Unit,
 ) {
+
+    val starsVm: StarsViewModel = viewModel()
 
     // ---- location bootstrap ----
     val ctx = LocalContext.current
@@ -111,7 +114,8 @@ fun CourtsListScreen(
                         userLoc = vm.userLoc,
                         onStartRun = onStartRun,
                         onJoinRun = onJoinRun,
-                        onLeaveRun = onLeaveRun
+                        onLeaveRun = onLeaveRun,
+                        starsVm = starsVm
                     )
                 }
             }

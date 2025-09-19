@@ -16,10 +16,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.google.android.gms.maps.model.LatLng
+import com.nicklewis.ballup.data.CourtLite
 import com.nicklewis.ballup.util.CourtRow
 import com.nicklewis.ballup.util.distanceKm
 import com.nicklewis.ballup.util.kmToMiles
 import com.nicklewis.ballup.model.Court
+import com.nicklewis.ballup.ui.components.StarButton
+import com.nicklewis.ballup.vm.StarsViewModel
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 
 @Composable
 fun CourtCard(
@@ -29,11 +34,21 @@ fun CourtCard(
     onStartRun: (courtId: String) -> Unit,
     onJoinRun: (runId: String) -> Unit,
     onLeaveRun: (runId: String) -> Unit,
+    starsVm: StarsViewModel
 ) {
     val courtId = row.courtId
     val court: Court = row.court
     val runId   = row.active?.first
     val currentRun = row.active?.second
+    val starred by starsVm.starred.collectAsState()
+
+    val courtLite = CourtLite(
+        id = row.courtId,
+        name = row.court.name,
+        lat = row.court.geo?.lat,
+        lng = row.court.geo?.lng
+    )
+
 
     ElevatedCard {
         Column(Modifier.padding(12.dp)) {
@@ -48,6 +63,11 @@ fun CourtCard(
                     }
                     AssistChip(onClick = {}, label = { Text(label) })
                 }
+
+                StarButton(
+                    checked = starred.contains(courtId),
+                    onCheckedChange = { newValue -> starsVm.toggle(courtLite, newValue) }
+                )
             }
 
             Text("${court.type?.uppercase().orEmpty()} • ${court.address.orEmpty()}")

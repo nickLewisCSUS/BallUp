@@ -33,12 +33,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import com.nicklewis.ballup.firebase.joinRun
 import com.nicklewis.ballup.firebase.leaveRun
+import com.nicklewis.ballup.ui.settings.SettingsScreen
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BallUpApp() {
     val nav = rememberNavController()
-    val items = listOf(Screen.Map, Screen.List)
+    val items = listOf(Screen.Map, Screen.List, Screen.Settings)
     var showAddCourt by remember { mutableStateOf(false) }
     var showIndoor by rememberSaveable { mutableStateOf(true) }
     var showOutdoor by rememberSaveable { mutableStateOf(true) }
@@ -46,8 +47,9 @@ fun BallUpApp() {
     Scaffold(
         topBar = {
             val title = when (currentRoute(nav)) {
-                Screen.List.route -> "BallUp — Courts"
-                else -> "BallUp — Map"
+                Screen.List.route     -> "BallUp — Courts"
+                Screen.Settings.route -> "BallUp — Settings"
+                else                  -> "BallUp — Map"
             }
             TopAppBar(title = { Text(title) })
         },
@@ -121,6 +123,10 @@ fun BallUpApp() {
                         if (uid != null) scope.launch { leaveRun(db, runId, uid) }
                     }
                 )
+            }
+
+            composable(Screen.Settings.route) {
+                SettingsScreen()
             }
         }
     }

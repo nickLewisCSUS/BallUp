@@ -25,6 +25,8 @@ import com.nicklewis.ballup.ui.components.StarButton
 import com.nicklewis.ballup.vm.StarsViewModel
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.nicklewis.ballup.vm.PrefsViewModel
 
 @Composable
 fun CourtCard(
@@ -34,13 +36,15 @@ fun CourtCard(
     onStartRun: (courtId: String) -> Unit,
     onJoinRun: (runId: String) -> Unit,
     onLeaveRun: (runId: String) -> Unit,
-    starsVm: StarsViewModel
+    starsVm: StarsViewModel,
+    prefsVm: PrefsViewModel = viewModel()
 ) {
     val courtId = row.courtId
     val court: Court = row.court
     val runId   = row.active?.first
     val currentRun = row.active?.second
     val starred by starsVm.starred.collectAsState()
+    val prefs by prefsVm.prefs.collectAsState()
 
     val courtLite = CourtLite(
         id = row.courtId,
@@ -65,8 +69,10 @@ fun CourtCard(
                 }
 
                 StarButton(
-                    checked = starred.contains(courtId),
-                    onCheckedChange = { newValue -> starsVm.toggle(courtLite, newValue) }
+                    checked = starred.contains(row.courtId),
+                    onCheckedChange = { newValue ->
+                        starsVm.toggle(courtLite, newValue, runAlertsEnabled = prefs.runAlerts)
+                    }
                 )
             }
 

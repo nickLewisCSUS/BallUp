@@ -68,11 +68,10 @@ fun CourtCard(
                     AssistChip(onClick = {}, label = { Text(label) })
                 }
 
+                val prefs by prefsVm.prefs.collectAsState()
                 StarButton(
                     checked = starred.contains(row.courtId),
-                    onCheckedChange = { newValue ->
-                        starsVm.toggle(courtLite, newValue, runAlertsEnabled = prefs.runAlerts)
-                    }
+                    onCheckedChange = { v -> starsVm.toggle(courtLite, v, runAlertsEnabled = prefs.runAlerts) }
                 )
             }
 

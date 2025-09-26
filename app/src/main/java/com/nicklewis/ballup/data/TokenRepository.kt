@@ -24,6 +24,7 @@ object TokenRepository {
 
     suspend fun saveToken(token: String) {
         val uid = auth.currentUser?.uid ?: return
+        android.util.Log.d("FCM_TOKEN", "Saved token: $token")
         db.collection("users").document(uid)
             .collection("tokens").document(token)
             .set(

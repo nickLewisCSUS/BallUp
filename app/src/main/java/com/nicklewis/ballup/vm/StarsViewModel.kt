@@ -26,7 +26,6 @@ class StarsViewModel(
         }
     }
 
-    // StarsViewModel.kt
     fun toggle(court: CourtLite, newValue: Boolean, runAlertsEnabled: Boolean) {
         val before = _starred.value
         _starred.value = if (newValue) before + court.id else before - court.id
@@ -34,19 +33,24 @@ class StarsViewModel(
         viewModelScope.launch {
             try {
                 repo.setStar(court, newValue)
-
                 if (runAlertsEnabled) {
                     try {
-                        setTopicSubscription(court.id, newValue)
-                    } catch (e: Exception) {
-                        // Non-fatal (don’t block star). Log if you want.
+                        val topic = "court_${court.id}"
+                        if (newValue) {
+                            FirebaseMessaging.getInstance().subscribeToTopic(topic).await()
+                        } else {
+                            FirebaseMessaging.getInstance().unsubscribeFromTopic(topic).await()
+                        }
+                    } catch (_: Exception) {
+                        // non-fatal
                     }
                 }
-            } catch (e: Exception) {
-                _starred.value = before // rollback on failure
+            } catch (_: Exception) {
+                _starred.value = before
             }
         }
     }
+
 
 
     private suspend fun setTopicSubscription(courtId: String, subscribe: Boolean) {

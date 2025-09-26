@@ -2,6 +2,8 @@
 
 package com.nicklewis.ballup
 
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -12,9 +14,15 @@ import androidx.lifecycle.lifecycleScope
 import com.nicklewis.ballup.data.TokenRepository
 import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        if (Build.VERSION.SDK_INT >= 33) {
+            val perm = android.Manifest.permission.POST_NOTIFICATIONS
+            if (checkSelfPermission(perm) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(perm), 1001)
+            }
+        }
 
         signInAnonIfNeeded()
 
@@ -22,7 +30,6 @@ class MainActivity : ComponentActivity() {
             BallUpApp()
         }
     }
-
     private fun signInAnonIfNeeded() {
         val auth = FirebaseAuth.getInstance()
 
@@ -40,4 +47,6 @@ class MainActivity : ComponentActivity() {
             lifecycleScope.launch { TokenRepository.ensureTokenSaved() }
         }
     }
+
+
 }

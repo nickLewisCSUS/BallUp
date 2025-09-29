@@ -29,6 +29,17 @@ class MainActivity : ComponentActivity() {
         setContent {
             BallUpApp()
         }
+
+         fun ensureAuth() {
+            val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
+            if (auth.currentUser == null) {
+                auth.signInAnonymously()
+                    .addOnSuccessListener { android.util.Log.d("Auth", "Anon UID=${it.user?.uid}") }
+                    .addOnFailureListener { e -> android.util.Log.e("Auth", "Anon sign-in failed", e) }
+            }
+         }
+        val app = com.google.firebase.FirebaseApp.getInstance()
+        android.util.Log.d("Firebase", "projectId=${app.options.projectId}, appId=${app.options.applicationId}")
     }
     private fun signInAnonIfNeeded() {
         val auth = FirebaseAuth.getInstance()
@@ -47,6 +58,4 @@ class MainActivity : ComponentActivity() {
             lifecycleScope.launch { TokenRepository.ensureTokenSaved() }
         }
     }
-
-
 }

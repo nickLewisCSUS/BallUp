@@ -1,4 +1,3 @@
-// functions/src/index.ts
 import * as admin from "firebase-admin";
 import { setGlobalOptions } from "firebase-functions/v2/options";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
@@ -8,12 +7,11 @@ import { logger } from "firebase-functions";
 admin.initializeApp();
 setGlobalOptions({ region: "us-central1", maxInstances: 1 });
 
-// Keep other exports
+// keep any other exports like cleanupStaleRuns
 export { cleanupStaleRuns } from "./cleanupRuns";
 
 /** ---------- helpers ---------- */
 function sanitizeTopicId(raw: string) {
-  // Topics allow letters, numbers, _ - .
   return raw.replace(/[^A-Za-z0-9_\-.]/g, "_");
 }
 
@@ -40,11 +38,11 @@ export const setCourtTopicSubscription = onCall(async (request) => {
   const topic = `court_${sanitizeTopicId(courtId)}`;
   if (subscribe) await admin.messaging().subscribeToTopic([token], topic);
   else           await admin.messaging().unsubscribeFromTopic([token], topic);
+  logger.info("topic subscription changed", { topic, subscribe });
   return { ok: true };
 });
 
 /** ---------- triggers: notify when a run starts ---------- */
-// on create, if status is already "active"
 export const notifyRunCreatedActive = onDocumentCreated("runs/{runId}", async (event) => {
   const run = event.data?.data() || {};
   if (run.status !== "active") return;
@@ -54,6 +52,8 @@ export const notifyRunCreatedActive = onDocumentCreated("runs/{runId}", async (e
 
   const courtName = (await getCourtName(courtId)) ?? (run.courtName ?? "A court");
   const topic = `court_${sanitizeTopicId(courtId)}`;
+
+  logger.info("notifyRunCreatedActive", { runId: event.params.runId, courtId, topic });
 
   await admin.messaging().send({
     topic,
@@ -67,10 +67,13 @@ export const notifyRunCreatedActive = onDocumentCreated("runs/{runId}", async (e
       runId: event.params.runId,
       courtName,
     },
+    android: {
+      priority: "high",
+      notification: { channelId: "runs" },
+    },
   });
 });
 
-// on update, when status changes to "active"
 export const notifyRunBecameActive = onDocumentUpdated("runs/{runId}", async (event) => {
   const before = event.data?.before?.data() || {};
   const after  = event.data?.after?.data()  || {};
@@ -83,6 +86,8 @@ export const notifyRunBecameActive = onDocumentUpdated("runs/{runId}", async (ev
   const courtName = (await getCourtName(courtId)) ?? (after.courtName ?? "A court");
   const topic = `court_${sanitizeTopicId(courtId)}`;
 
+  logger.info("notifyRunBecameActive", { runId: event.params.runId, courtId, topic });
+
   await admin.messaging().send({
     topic,
     notification: {
@@ -94,6 +99,10 @@ export const notifyRunBecameActive = onDocumentUpdated("runs/{runId}", async (ev
       courtId,
       runId: event.params.runId,
       courtName,
+    },
+    android: {
+      priority: "high",
+      notification: { channelId: "runs" },
     },
   });
 });

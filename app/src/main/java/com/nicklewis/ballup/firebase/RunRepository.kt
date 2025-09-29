@@ -5,17 +5,40 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.nicklewis.ballup.model.Run
 import kotlinx.coroutines.tasks.await
 
-/**
- * Transactional JOIN: prevents double-join and overfilling.
- * Throws IllegalStateException with a user-friendly message you can surface in UI.
- */
+/** Creates a run immediately as active and includes the host as the first player. */
+suspend fun startRun(
+    db: FirebaseFirestore,
+    courtId: String,
+    hostUid: String,
+    mode: String = "5v5",
+    maxPlayers: Int = 10
+): String {
+    require(maxPlayers in 2..30) { "Max players must be between 2 and 30" }
+
+    val ref = db.collection("runs").document()
+    val data = mapOf(
+        "runId" to ref.id,
+        "courtId" to courtId,
+        "status" to "active",
+        "startTime" to FieldValue.serverTimestamp(),
+        "hostId" to hostUid,
+        "mode" to mode,
+        "maxPlayers" to maxPlayers,
+        "lastHeartbeatAt" to FieldValue.serverTimestamp(),
+        "playerCount" to 1,
+        "playerIds" to listOf(hostUid)
+    )
+    ref.set(data).await()
+    return ref.id
+}
+
+/** Transactional JOIN: prevents double-join and overfilling. */
 suspend fun joinRun(db: FirebaseFirestore, runId: String, uid: String) {
     db.runTransaction { tx ->
         val ref  = db.collection("runs").document(runId)
         val snap = tx.get(ref)
         val run  = snap.toObject(Run::class.java) ?: throw IllegalStateException("Run not found")
 
-        // basic guards
         if (run.status != "active") throw IllegalStateException("This run has ended")
         val max = run.maxPlayers.takeIf { it > 0 } ?: 10
 
@@ -33,9 +56,7 @@ suspend fun joinRun(db: FirebaseFirestore, runId: String, uid: String) {
     }.await()
 }
 
-/**
- * Transactional LEAVE: safely removes a user and keeps counts in sync.
- */
+/** Transactional LEAVE. */
 suspend fun leaveRun(db: FirebaseFirestore, runId: String, uid: String) {
     db.runTransaction { tx ->
         val ref  = db.collection("runs").document(runId)
@@ -90,7 +111,6 @@ suspend fun updateMaxPlayers(db: FirebaseFirestore, runId: String, requesterUid:
 }
 
 suspend fun updateMode(db: FirebaseFirestore, runId: String, requesterUid: String, mode: String) {
-    // e.g. "3v3","4v4","5v5"
     require(mode in listOf("3v3","4v4","5v5")) { "Unsupported mode" }
     db.runTransaction { tx ->
         val ref = db.collection("runs").document(runId)
@@ -107,7 +127,6 @@ suspend fun updateMode(db: FirebaseFirestore, runId: String, requesterUid: Strin
     }.await()
 }
 
-/** Optional: host kicks a player */
 suspend fun kickPlayer(db: FirebaseFirestore, runId: String, requesterUid: String, targetUid: String) {
     db.runTransaction { tx ->
         val ref = db.collection("runs").document(runId)

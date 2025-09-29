@@ -1,5 +1,7 @@
 package com.nicklewis.ballup.ui.courts
 
+import android.Manifest
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -20,27 +22,25 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.android.gms.location.LocationServices
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
 import com.nicklewis.ballup.ui.courts.components.CourtCard
 import com.nicklewis.ballup.ui.courts.components.SearchBarWithSuggestions
 import com.nicklewis.ballup.ui.courts.components.FilterBar
-import android.Manifest
 import com.nicklewis.ballup.util.fetchLastKnownLocation
 import com.nicklewis.ballup.util.hasLocationPermission
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.nicklewis.ballup.vm.StarsViewModel
-
+import com.nicklewis.ballup.firebase.startRun
+import com.nicklewis.ballup.firebase.joinRun
+import com.nicklewis.ballup.firebase.leaveRun
+import kotlinx.coroutines.launch
 
 @Composable
 fun CourtsListScreen(
     vm: CourtsListViewModel = viewModel(),
-    onStartRun: (courtId: String) -> Unit,
-    onJoinRun: (runId: String) -> Unit,
-    onLeaveRun: (runId: String) -> Unit,
 ) {
-
     val starsVm: StarsViewModel = viewModel()
 
-    // ---- location bootstrap ----
+    // location bootstrap
     val ctx = LocalContext.current
     val fused = remember { LocationServices.getFusedLocationProviderClient(ctx) }
 
@@ -50,10 +50,7 @@ fun CourtsListScreen(
         val granted =
             grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
                     grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-
-        if (granted) {
-            fetchLastKnownLocation(fused) { loc -> vm.userLoc = loc }   // <-- pass onResult
-        }
+        if (granted) fetchLastKnownLocation(fused) { loc -> vm.userLoc = loc }
     }
 
     LaunchedEffect(Unit) {
@@ -68,11 +65,12 @@ fun CourtsListScreen(
             )
         }
     }
+
     val uid = FirebaseAuth.getInstance().currentUser?.uid
     val scope = rememberCoroutineScope()
+    val db = remember { FirebaseFirestore.getInstance() }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-
         SearchBarWithSuggestions(
             query = vm.query,
             onQueryChange = { vm.query = it },
@@ -96,13 +94,9 @@ fun CourtsListScreen(
         )
 
         vm.error?.let { Text("Error: $it", color = MaterialTheme.colorScheme.error) }
-        if (vm.courts.isEmpty()) {
-            Text("No courts yet. Add one in Firestore to see it here.")
-        }
-
-        if (vm.rows.isEmpty()) {
-            Text("No courts match your filter.")
-        } else {
+        if (vm.courts.isEmpty()) Text("No courts yet. Add one in Firestore to see it here.")
+        if (vm.rows.isEmpty())  Text("No courts match your filter.")
+        else {
             LazyColumn(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -112,9 +106,36 @@ fun CourtsListScreen(
                         row = row,
                         uid = uid,
                         userLoc = vm.userLoc,
-                        onStartRun = onStartRun,
-                        onJoinRun = onJoinRun,
-                        onLeaveRun = onLeaveRun,
+                        onStartRun = { courtId ->
+                            if (uid == null) { Log.e("Runs","startRun: not signed in"); return@CourtCard }
+                            scope.launch {
+                                try {
+                                    startRun(
+                                        db = db,
+                                        courtId = courtId,
+                                        hostUid = uid,
+                                        mode = "5v5",
+                                        maxPlayers = 10
+                                    )
+                                } catch (e: Exception) {
+                                    Log.e("Runs","startRun failed", e)
+                                }
+                            }
+                        },
+                        onJoinRun = { runId ->
+                            if (uid == null) { Log.e("Runs","joinRun: not signed in"); return@CourtCard }
+                            scope.launch {
+                                try { joinRun(db, runId, uid) }
+                                catch (e: Exception) { Log.e("Runs","joinRun failed", e) }
+                            }
+                        },
+                        onLeaveRun = { runId ->
+                            if (uid == null) { Log.e("Runs","leaveRun: not signed in"); return@CourtCard }
+                            scope.launch {
+                                try { leaveRun(db, runId, uid) }
+                                catch (e: Exception) { Log.e("Runs","leaveRun failed", e) }
+                            }
+                        },
                         starsVm = starsVm
                     )
                 }

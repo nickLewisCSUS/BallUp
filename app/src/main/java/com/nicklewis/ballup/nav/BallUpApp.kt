@@ -23,16 +23,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.FieldValue
-import com.google.firebase.firestore.FirebaseFirestore
 import com.nicklewis.ballup.AddCourtDialog
 import com.nicklewis.ballup.ui.courts.CourtsListScreen
 import com.nicklewis.ballup.ui.map.CourtsMapScreen
-import androidx.compose.runtime.rememberCoroutineScope
-import kotlinx.coroutines.launch
-import com.nicklewis.ballup.firebase.joinRun
-import com.nicklewis.ballup.firebase.leaveRun
 import com.nicklewis.ballup.ui.settings.SettingsScreen
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -96,48 +89,22 @@ fun BallUpApp() {
                 )
             }
             composable(Screen.List.route) {
-                val db    = remember { FirebaseFirestore.getInstance() }
-                val uid   = FirebaseAuth.getInstance().currentUser?.uid
-                val scope = rememberCoroutineScope()
-
-                CourtsListScreen(
-                    onStartRun = { courtId ->
-                        val hostId = uid ?: "uid_dev"
-                        val run = mapOf(
-                            "courtId" to courtId,
-                            "status" to "active",
-                            "startTime" to FieldValue.serverTimestamp(),
-                            "hostId" to hostId,
-                            "mode" to "5v5",
-                            "maxPlayers" to 10,
-                            "lastHeartbeatAt" to FieldValue.serverTimestamp(),
-                            "playerCount" to 1,
-                            "playerIds" to listOfNotNull(hostId)
-                        )
-                        db.collection("runs").add(run)
-                    },
-                    onJoinRun = { runId ->
-                        if (uid != null) scope.launch { joinRun(db, runId, uid) }
-                    },
-                    onLeaveRun = { runId ->
-                        if (uid != null) scope.launch { leaveRun(db, runId, uid) }
-                    }
-                )
+                // ⬇️ the list screen owns start/join/leave
+                CourtsListScreen()
             }
-
             composable(Screen.Settings.route) {
                 SettingsScreen()
             }
         }
     }
 
-        if (showAddCourt) {
-            AddCourtDialog(
-                onDismiss = { showAddCourt = false },
-                onSaved = { showAddCourt = false }
-            )
-        }
+    if (showAddCourt) {
+        AddCourtDialog(
+            onDismiss = { showAddCourt = false },
+            onSaved = { showAddCourt = false }
+        )
     }
+}
 
 @Composable
 private fun currentRoute(nav: NavHostController): String? {

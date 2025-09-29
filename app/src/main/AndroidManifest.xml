@@ -18,10 +18,18 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.BallUp">
 
-        <!-- 🔑 Google Maps API key reference -->
+        <!-- Google Maps key -->
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="${MAPS_API_KEY}" />
+
+        <!-- Optional: default notification channel/icon for FCM -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="runs" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_notification" />
 
         <activity
             android:name=".MainActivity"
@@ -34,6 +42,7 @@
             </intent-filter>
         </activity>
 
+        <!-- FCM service -->
         <service
             android:name=".fcm.BallUpMessagingService"
             android:exported="false">
@@ -43,6 +52,4 @@
         </service>
 
     </application>
-
-
 </manifest>

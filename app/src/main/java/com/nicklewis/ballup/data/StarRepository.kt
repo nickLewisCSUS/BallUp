@@ -3,6 +3,8 @@ package com.nicklewis.ballup.data
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.functions.FirebaseFunctions
+import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -17,7 +19,9 @@ data class CourtLite(
 
 class StarRepository(
     private val db: FirebaseFirestore = FirebaseFirestore.getInstance(),
-    private val auth: FirebaseAuth = FirebaseAuth.getInstance()
+    private val auth: FirebaseAuth = FirebaseAuth.getInstance(),
+    private val fns: FirebaseFunctions = FirebaseFunctions.getInstance("us-central1"),
+    private val fcm: FirebaseMessaging = FirebaseMessaging.getInstance()
 ) {
     private fun uid(): String = auth.currentUser?.uid
         ?: throw IllegalStateException("Not signed in")
@@ -48,10 +52,16 @@ class StarRepository(
         } else {
             ref.delete().await()
         }
+
+        // subscribe/unsubscribe the device to the court topic
+        val token = fcm.token.await()
+        fns.getHttpsCallable("setCourtTopicSubscription")
+            .call(mapOf("token" to token, "courtId" to court.id, "subscribe" to star))
+            .await()
     }
 }
 
-// simple Task.await() helper (if you don’t already have one)
+// await helpers
 private suspend fun <T> com.google.android.gms.tasks.Task<T>.await(): T =
     kotlinx.coroutines.suspendCancellableCoroutine { cont ->
         addOnCompleteListener { task ->

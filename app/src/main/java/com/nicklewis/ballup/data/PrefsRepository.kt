@@ -8,24 +8,38 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 
-data class UserPrefs(val runAlerts: Boolean = true)
+// Add the new flag here
+data class UserPrefs(
+    val runAlerts: Boolean = true,
+    val notifyWhileForeground: Boolean = false,
+)
 
 class PrefsRepository(
     private val db: FirebaseFirestore = FirebaseFirestore.getInstance(),
     private val auth: FirebaseAuth = FirebaseAuth.getInstance()
 ) {
-    private fun uid(): String = auth.currentUser?.uid ?: throw IllegalStateException("Not signed in")
-    private fun doc() = db.collection("users").document(uid()).collection("prefs").document("app")
+    private fun uid(): String =
+        auth.currentUser?.uid ?: throw IllegalStateException("Not signed in")
 
+    private fun doc() =
+        db.collection("users").document(uid()).collection("prefs").document("app")
+
+    // Now emit BOTH fields
     fun listen(): Flow<UserPrefs> = callbackFlow {
         val reg = doc().addSnapshotListener { snap, _ ->
-            val on = snap?.getBoolean("runAlerts") ?: true
-            trySend(UserPrefs(runAlerts = on))
+            val run = snap?.getBoolean("runAlerts") ?: true
+            val notifyFg = snap?.getBoolean("notifyWhileForeground") ?: false
+            trySend(UserPrefs(runAlerts = run, notifyWhileForeground = notifyFg))
         }
         awaitClose { reg.remove() }
     }
 
     suspend fun setRunAlerts(enabled: Boolean) {
         doc().set(mapOf("runAlerts" to enabled), SetOptions.merge()).await()
+    }
+
+    // New setter
+    suspend fun setNotifyWhileForeground(enabled: Boolean) {
+        doc().set(mapOf("notifyWhileForeground" to enabled), SetOptions.merge()).await()
     }
 }

@@ -23,6 +23,7 @@ import com.nicklewis.ballup.nav.NotifBus
 import com.nicklewis.ballup.nav.InAppAlert
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import android.Manifest
@@ -59,52 +60,61 @@ class BallUpMessagingService : FirebaseMessagingService() {
         val slotsLeft = data["slotsLeft"] ?: ""
 
         if (type == "run_spots" && runId.isNotEmpty()) {
-            if (applicationIsInForeground()) {
-                val title = if (slotsLeft == "1") "A spot opened" else "$slotsLeft spots left"
-                NotifBus.emit(InAppAlert.RunSpots(title, courtName, runId))
-                return
-            }
-
-            // System notification → deep link to the run
-            val intent = Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                putExtra("deeplink_runId", runId)
-            }
-            val pi = PendingIntent.getActivity(
-                this, 1001, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            val channelId = "run_spots"
-            ensureChannel(channelId, "Run Alerts")
-
-            val title = if (slotsLeft == "1") "A spot just opened" else "$slotsLeft spots left"
+            val title = if (slotsLeft == "1") "A spot opened" else "$slotsLeft spots left"
             val text  = if (courtName.isNotEmpty()) courtName else "Tap to view"
 
-            // ---- run_spots branch ----
-            val notif = NotificationCompat.Builder(this, channelId)
-                .setSmallIcon(notificationIcon())
-                .setContentTitle(title)
-                .setContentText(text)
-                .setContentIntent(pi)
-                .setAutoCancel(true)
-                .build()
+            // 1) Always emit in-app banner (no-op if app not visible)
+            NotifBus.emit(InAppAlert.RunSpots(title, courtName, runId))
 
-            if (Build.VERSION.SDK_INT >= 33 &&
-                ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED
-            ) {
-                return  // user denied notifications on Android 13+
-            }
-            if (!NotificationManagerCompat.from(this).areNotificationsEnabled()) {
-                return  // app-level notifications disabled
-            }
+            // 2) Post a SYSTEM notification only if:
+            //    - app is backgrounded, or
+            //    - user enabled "notify while foreground"
+            val ctx = applicationContext
+            CoroutineScope(Dispatchers.IO).launch {
+                val allowWhileForeground = try {
+                    com.nicklewis.ballup.data.LocalPrefsStore(ctx)
+                        .prefsFlow.first().notifyWhileForeground
+                } catch (_: Throwable) { false }
 
-            NotificationManagerCompat.from(this).notify(9001, notif)
+                val inForeground = applicationIsInForeground()
+                if (!inForeground || allowWhileForeground) {
+
+                    // Deep link intent → run screen
+                    val intent = Intent(ctx, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        putExtra("deeplink_runId", runId)
+                    }
+                    val pi = PendingIntent.getActivity(
+                        ctx, 1001, intent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+
+                    val channelId = "run_spots"
+                    ensureChannel(channelId, "Run Alerts")
+
+                    val notif = NotificationCompat.Builder(ctx, channelId)
+                        .setSmallIcon(notificationIcon())
+                        .setContentTitle(title)
+                        .setContentText(text)
+                        .setContentIntent(pi)
+                        .setAutoCancel(true)
+                        .build()
+
+                    if (Build.VERSION.SDK_INT >= 33 &&
+                        ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS)
+                        != PackageManager.PERMISSION_GRANTED
+                    ) return@launch
+                    if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) {
+                        return@launch
+                    }
+
+                    NotificationManagerCompat.from(ctx).notify(9001, notif)
+                }
+            }
             return
         }
 
-        // Fallback for notification-only messages
+        // --- Fallback for notification-only messages (unchanged) ---
         val title = msg.notification?.title ?: "BallUp"
         val body  = msg.notification?.body  ?: "New update"
         val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -131,6 +141,7 @@ class BallUpMessagingService : FirebaseMessagingService() {
             fallback
         )
     }
+
 
     private fun ensureChannel(id: String, name: String) {
         if (Build.VERSION.SDK_INT >= 26) {

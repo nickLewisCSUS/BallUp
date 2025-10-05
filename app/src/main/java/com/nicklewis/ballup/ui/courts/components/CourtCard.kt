@@ -1,32 +1,21 @@
 package com.nicklewis.ballup.ui.courts.components
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
-import androidx.compose.material3.ElevatedCard
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.google.android.gms.maps.model.LatLng
 import com.nicklewis.ballup.data.CourtLite
+import com.nicklewis.ballup.model.Court
+import com.nicklewis.ballup.ui.components.StarButton
 import com.nicklewis.ballup.util.CourtRow
 import com.nicklewis.ballup.util.distanceKm
 import com.nicklewis.ballup.util.kmToMiles
-import com.nicklewis.ballup.model.Court
-import com.nicklewis.ballup.ui.components.StarButton
-import com.nicklewis.ballup.vm.StarsViewModel
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.nicklewis.ballup.vm.PrefsViewModel
+import com.nicklewis.ballup.vm.StarsViewModel
 
 @Composable
 fun CourtCard(
@@ -37,14 +26,15 @@ fun CourtCard(
     onJoinRun: (runId: String) -> Unit,
     onLeaveRun: (runId: String) -> Unit,
     starsVm: StarsViewModel,
-    prefsVm: PrefsViewModel = viewModel()
+    prefsVm: PrefsViewModel,   // passed in from the screen
 ) {
     val courtId = row.courtId
     val court: Court = row.court
-    val runId   = row.active?.first
+    val runId = row.active?.first
     val currentRun = row.active?.second
+
     val starred by starsVm.starred.collectAsState()
-    val prefs by prefsVm.prefs.collectAsState()
+    val prefs by prefsVm.prefs.collectAsState()   // <-- single collect here
 
     val courtLite = CourtLite(
         id = row.courtId,
@@ -52,7 +42,6 @@ fun CourtCard(
         lat = row.court.geo?.lat,
         lng = row.court.geo?.lng
     )
-
 
     ElevatedCard {
         Column(Modifier.padding(12.dp)) {
@@ -68,10 +57,15 @@ fun CourtCard(
                     AssistChip(onClick = {}, label = { Text(label) })
                 }
 
-                val prefs by prefsVm.prefs.collectAsState()
                 StarButton(
                     checked = starred.contains(row.courtId),
-                    onCheckedChange = { v -> starsVm.toggle(courtLite, v, runAlertsEnabled = prefs.runAlerts) }
+                    onCheckedChange = { v ->
+                        starsVm.toggle(
+                            courtLite,
+                            v,
+                            runAlertsEnabled = prefs.runAlerts
+                        )
+                    }
                 )
             }
 

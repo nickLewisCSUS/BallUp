@@ -33,15 +33,19 @@ import com.nicklewis.ballup.firebase.startRun
 import com.nicklewis.ballup.firebase.joinRun
 import com.nicklewis.ballup.firebase.leaveRun
 import kotlinx.coroutines.launch
+import com.nicklewis.ballup.vm.PrefsViewModel
 
 @Composable
 fun CourtsListScreen(
     vm: CourtsListViewModel = viewModel(),
 ) {
+
     val starsVm: StarsViewModel = viewModel()
 
     // location bootstrap
     val ctx = LocalContext.current
+    val prefsVm: PrefsViewModel =
+        androidx.lifecycle.viewmodel.compose.viewModel(factory = PrefsViewModel.factory(ctx))
     val fused = remember { LocationServices.getFusedLocationProviderClient(ctx) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -136,7 +140,8 @@ fun CourtsListScreen(
                                 catch (e: Exception) { Log.e("Runs","leaveRun failed", e) }
                             }
                         },
-                        starsVm = starsVm
+                        starsVm = starsVm,
+                        prefsVm = prefsVm
                     )
                 }
             }

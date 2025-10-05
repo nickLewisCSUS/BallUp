@@ -57,10 +57,6 @@ export const notifyRunCreatedActive = onDocumentCreated("runs/{runId}", async (e
 
   await admin.messaging().send({
     topic,
-    notification: {
-      title: "Run just started",
-      body: `${courtName} • ${(run.playerCount ?? 1)}/${(run.maxPlayers ?? 10)} players`,
-    },
     data: {
       type: "run_open",
       courtId,

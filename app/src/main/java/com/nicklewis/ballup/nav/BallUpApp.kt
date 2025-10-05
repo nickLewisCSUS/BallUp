@@ -12,6 +12,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,11 +28,29 @@ import com.nicklewis.ballup.AddCourtDialog
 import com.nicklewis.ballup.ui.courts.CourtsListScreen
 import com.nicklewis.ballup.ui.map.CourtsMapScreen
 import com.nicklewis.ballup.ui.settings.SettingsScreen
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
+import com.nicklewis.ballup.ui.runs.RunDetailsScreen
+import androidx.compose.runtime.LaunchedEffect
+
+const val ROUTE_RUN = "run/{runId}"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BallUpApp() {
+
     val nav = rememberNavController()
+
+    // set & clear the global holder so MainActivity can navigate from pushes
+    DisposableEffect(nav) {
+        AppNavControllerHolder.navController = nav
+        onDispose {
+            if (AppNavControllerHolder.navController === nav) {
+                AppNavControllerHolder.navController = null
+            }
+        }
+    }
+
     val items = listOf(Screen.Map, Screen.List, Screen.Settings)
     var showAddCourt by remember { mutableStateOf(false) }
     var showIndoor by rememberSaveable { mutableStateOf(true) }
@@ -89,13 +108,26 @@ fun BallUpApp() {
                 )
             }
             composable(Screen.List.route) {
-                // ⬇️ the list screen owns start/join/leave
                 CourtsListScreen()
             }
             composable(Screen.Settings.route) {
                 SettingsScreen()
             }
+
+            // 3) ⬇️ Add this new route block right here
+            composable(
+                route = ROUTE_RUN,
+                arguments = listOf(navArgument("runId") { type = NavType.StringType })
+            ) { backStackEntry ->
+                val runId = backStackEntry.arguments?.getString("runId")!!
+                RunDetailsScreen(
+                    runId = runId,
+                    onBack = { nav.popBackStack() } // optional
+                )
+            }
         }
+
+        InAppAlertsOverlay(nav)
     }
 
     if (showAddCourt) {

@@ -76,16 +76,18 @@ fun RunDetailsScreen(
         }
     }
 
-    // ----- Listen to membership doc -----
-    DisposableEffect(runId, uid) {
-        if (uid == null) return@DisposableEffect onDispose {}
-        var reg: ListenerRegistration? = null
-        reg = db.collection("runs").document(runId)
-            .collection("members").document(uid)
-            .addSnapshotListener { snap, _ ->
-                isMember = (snap != null && snap.exists())
-            }
-        onDispose { reg?.remove() }
+
+    // track membership from the run doc itself
+    LaunchedEffect(run, uid) {
+        val r = run ?: return@LaunchedEffect
+        val me = uid
+        isMember = when {
+            me == null -> false
+            r.hostId == me -> true
+            r.hostUid == me -> true
+            r.playerIds.contains(me) -> true
+            else -> false
+        }
     }
 
     // ----- UI -----
@@ -152,15 +154,15 @@ fun RunDetailsScreen(
 
                     Spacer(Modifier.height(16.dp))
 
-                    // Members list if your run doc exposes memberUids (optional)
-                    if (r.memberUids.isNotEmpty()) {
-                        Text("Players", style = MaterialTheme.typography.titleMedium)
+                    // Members list from run.playerIds (optional, simple rendering)
+                    if (r.playerIds.isNotEmpty()) {
+                        Text("Players (${r.playerIds.size})", style = MaterialTheme.typography.titleMedium)
                         Spacer(Modifier.height(8.dp))
                         LazyColumn(
                             modifier = Modifier.weight(1f, fill = false),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            items(r.memberUids) { uidItem ->
+                            items(r.playerIds) { uidItem ->
                                 Text("• $uidItem", style = MaterialTheme.typography.bodyMedium)
                             }
                         }
@@ -220,7 +222,7 @@ fun RunDetailsScreen(
                     // Tiny footer info
                     Spacer(Modifier.height(10.dp))
                     Text(
-                        text = "Host: ${r.hostUid ?: "unknown"}",
+                        text = "Host: ${r.hostId ?: r.hostUid ?: "unknown"}",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -264,21 +266,21 @@ private data class RunDoc(
     val status: String?,
     val maxPlayers: Int,
     val playerCount: Int,
-    val hostUid: String?,
-    val memberUids: List<String>
+    val hostUid: String?,              // you used hostUid here, firestore field is hostId in your startRun()
+    val hostId: String?,               // keep both in case
+    val playerIds: List<String>        // <-- NEW
 ) {
     companion object {
         fun from(data: Map<String, Any>, ref: DocumentReference): RunDoc {
-            val courtId = data["courtId"] as? String
-            val mode = data["mode"] as? String
-            val status = data["status"] as? String ?: "active"
+            val courtId    = data["courtId"] as? String
+            val mode       = data["mode"] as? String
+            val status     = data["status"] as? String ?: "active"
             val maxPlayers = (data["maxPlayers"] as? Number)?.toInt() ?: 10
-            val playerCount = (data["playerCount"] as? Number)?.toInt() ?: 0
-            val hostUid = data["hostUid"] as? String
-            // optional array field if you keep a list of member UIDs in the run doc
+            val playerCount= (data["playerCount"] as? Number)?.toInt() ?: 0
+            val hostUid    = data["hostUid"] as? String
+            val hostId     = data["hostId"] as? String
             @Suppress("UNCHECKED_CAST")
-            val memberUids = (data["memberUids"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
-
+            val playerIds  = (data["playerIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
             return RunDoc(
                 ref = ref,
                 courtId = courtId,
@@ -287,7 +289,8 @@ private data class RunDoc(
                 maxPlayers = maxPlayers,
                 playerCount = playerCount,
                 hostUid = hostUid,
-                memberUids = memberUids
+                hostId = hostId,
+                playerIds = playerIds
             )
         }
     }

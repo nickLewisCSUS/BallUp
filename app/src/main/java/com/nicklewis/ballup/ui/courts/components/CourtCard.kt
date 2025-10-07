@@ -17,6 +17,7 @@ import com.nicklewis.ballup.util.kmToMiles
 import com.nicklewis.ballup.vm.PrefsViewModel
 import com.nicklewis.ballup.vm.StarsViewModel
 
+// CourtCard.kt
 @Composable
 fun CourtCard(
     row: CourtRow,
@@ -25,8 +26,9 @@ fun CourtCard(
     onStartRun: (courtId: String) -> Unit,
     onJoinRun: (runId: String) -> Unit,
     onLeaveRun: (runId: String) -> Unit,
+    onViewRun: (runId: String) -> Unit,
     starsVm: StarsViewModel,
-    prefsVm: PrefsViewModel,   // passed in from the screen
+    prefsVm: PrefsViewModel,
 ) {
     val courtId = row.courtId
     val court: Court = row.court
@@ -34,7 +36,7 @@ fun CourtCard(
     val currentRun = row.active?.second
 
     val starred by starsVm.starred.collectAsState()
-    val prefs by prefsVm.prefs.collectAsState()   // <-- single collect here
+    val prefs by prefsVm.prefs.collectAsState()
 
     val courtLite = CourtLite(
         id = row.courtId,
@@ -47,6 +49,7 @@ fun CourtCard(
         Column(Modifier.padding(12.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(court.name.orEmpty(), style = MaterialTheme.typography.titleMedium)
+
                 currentRun?.let { r ->
                     val open = (r.maxPlayers - r.playerCount).coerceAtLeast(0)
                     val label = when {
@@ -60,11 +63,7 @@ fun CourtCard(
                 StarButton(
                     checked = starred.contains(row.courtId),
                     onCheckedChange = { v ->
-                        starsVm.toggle(
-                            courtLite,
-                            v,
-                            runAlertsEnabled = prefs.runAlerts
-                        )
+                        starsVm.toggle(courtLite, v, runAlertsEnabled = prefs.runAlerts)
                     }
                 )
             }
@@ -74,13 +73,8 @@ fun CourtCard(
             court.geo?.lat?.let { lat ->
                 court.geo?.lng?.let { lng ->
                     userLoc?.let {
-                        val mi = kmToMiles(
-                            distanceKm(it.latitude, it.longitude, lat, lng)
-                        )
-                        Text(
-                            String.format("%.1f mi away", mi),
-                            style = MaterialTheme.typography.bodySmall
-                        )
+                        val mi = kmToMiles(distanceKm(it.latitude, it.longitude, lat, lng))
+                        Text(String.format("%.1f mi away", mi), style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -91,10 +85,18 @@ fun CourtCard(
                 Button(onClick = { onStartRun(courtId) }) { Text("Start run") }
             } else {
                 val alreadyIn = uid != null && (currentRun.playerIds?.contains(uid) == true)
-                if (!alreadyIn) {
-                    Button(onClick = { runId?.let(onJoinRun) }) { Text("Join") }
-                } else {
-                    OutlinedButton(onClick = { runId?.let(onLeaveRun) }) { Text("Leave") }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Primary action
+                    Button(
+                        onClick = { runId?.let(onViewRun) }  // 👈 always allow viewing active run
+                    ) { Text("View run") }
+
+                    // Secondary action depends on membership
+                    if (!alreadyIn) {
+                        OutlinedButton(onClick = { runId?.let(onJoinRun) }) { Text("Join") }
+                    } else {
+                        OutlinedButton(onClick = { runId?.let(onLeaveRun) }) { Text("Leave") }
+                    }
                 }
             }
         }

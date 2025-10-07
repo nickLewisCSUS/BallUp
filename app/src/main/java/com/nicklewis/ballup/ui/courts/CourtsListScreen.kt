@@ -23,7 +23,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.nicklewis.ballup.ui.courts.components.CourtCard
 import com.nicklewis.ballup.ui.courts.components.SearchBarWithSuggestions
 import com.nicklewis.ballup.ui.courts.components.FilterBar
-import com.nicklewis.ballup.ui.courts.components.RunCreateDialog   // <-- import
+import com.nicklewis.ballup.ui.courts.components.RunCreateDialog
 import com.nicklewis.ballup.util.fetchLastKnownLocation
 import com.nicklewis.ballup.util.hasLocationPermission
 import com.nicklewis.ballup.vm.StarsViewModel
@@ -32,6 +32,7 @@ import com.nicklewis.ballup.firebase.joinRun
 import com.nicklewis.ballup.firebase.leaveRun
 import kotlinx.coroutines.launch
 import com.nicklewis.ballup.vm.PrefsViewModel
+import com.nicklewis.ballup.nav.AppNavControllerHolder
 
 @Composable
 fun CourtsListScreen(
@@ -108,22 +109,18 @@ fun CourtsListScreen(
                         row = row,
                         uid = uid,
                         userLoc = vm.userLoc,
-                        onStartRun = { courtId ->
-                            // OPEN DIALOG (do NOT start immediately)
-                            showCreate = courtId
-                        },
+                        onStartRun = { courtId -> showCreate = courtId },
                         onJoinRun = { runId ->
                             if (uid == null) { Log.e("Runs","joinRun: not signed in"); return@CourtCard }
-                            scope.launch {
-                                try { joinRun(db, runId, uid) }
-                                catch (e: Exception) { Log.e("Runs","joinRun failed", e) }
-                            }
+                            scope.launch { try { joinRun(db, runId, uid) } catch (e: Exception) { Log.e("Runs","joinRun failed", e) } }
                         },
                         onLeaveRun = { runId ->
                             if (uid == null) { Log.e("Runs","leaveRun: not signed in"); return@CourtCard }
-                            scope.launch {
-                                try { leaveRun(db, runId, uid) }
-                                catch (e: Exception) { Log.e("Runs","leaveRun failed", e) }
+                            scope.launch { try { leaveRun(db, runId, uid) } catch (e: Exception) { Log.e("Runs","leaveRun failed", e) } }
+                        },
+                        onViewRun = { runId ->
+                            AppNavControllerHolder.navController?.navigate("run/$runId") {
+                                launchSingleTop = true; restoreState = true
                             }
                         },
                         starsVm = starsVm,

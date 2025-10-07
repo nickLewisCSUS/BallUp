@@ -8,6 +8,9 @@ import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.tasks.await
 import kotlin.coroutines.resumeWithException
 
 data class CourtLite(
@@ -23,22 +26,36 @@ class StarRepository(
     private val fns: FirebaseFunctions = FirebaseFunctions.getInstance("us-central1"),
     private val fcm: FirebaseMessaging = FirebaseMessaging.getInstance()
 ) {
-    private fun uid(): String = auth.currentUser?.uid
-        ?: throw IllegalStateException("Not signed in")
-
-    fun starredIds(): Flow<Set<String>> = callbackFlow {
-        val reg = db.collection("users").document(uid())
-            .collection("stars")
-            .addSnapshotListener { snap, err ->
-                if (err != null) { trySend(emptySet()); return@addSnapshotListener }
-                val ids = snap?.documents?.map { it.id }?.toSet().orEmpty()
-                trySend(ids)
-            }
-        awaitClose { reg.remove() }
+    /** Emit uid (or null) as auth state changes. */
+    private fun authUidFlow(): Flow<String?> = callbackFlow {
+        val listener = FirebaseAuth.AuthStateListener { fa -> trySend(fa.currentUser?.uid) }
+        auth.addAuthStateListener(listener)
+        trySend(auth.currentUser?.uid) // initial
+        awaitClose { auth.removeAuthStateListener(listener) }
     }
 
+    /** Public: stream of starred court IDs. Empty set while not signed-in yet. */
+    fun starredIds(): Flow<Set<String>> =
+        authUidFlow().flatMapLatest { uid ->
+            if (uid == null) {
+                flowOf(emptySet())
+            } else {
+                callbackFlow {
+                    val reg = db.collection("users").document(uid)
+                        .collection("stars")
+                        .addSnapshotListener { snap, _ ->
+                            val ids = snap?.documents?.map { it.id }?.toSet().orEmpty()
+                            trySend(ids)
+                        }
+                    awaitClose { reg.remove() }
+                }
+            }
+        }
+
+    /** Set/clear a star. Quiet no-op if not signed-in yet. */
     suspend fun setStar(court: CourtLite, star: Boolean) {
-        val ref = db.collection("users").document(uid())
+        val uid = auth.currentUser?.uid ?: return
+        val ref = db.collection("users").document(uid)
             .collection("stars").document(court.id)
 
         if (star) {
@@ -53,7 +70,7 @@ class StarRepository(
             ref.delete().await()
         }
 
-        // subscribe/unsubscribe the device to the court topic
+        // Subscribe/unsubscribe this device to the court topic via your callable
         val token = fcm.token.await()
         fns.getHttpsCallable("setCourtTopicSubscription")
             .call(mapOf("token" to token, "courtId" to court.id, "subscribe" to star))
@@ -61,7 +78,7 @@ class StarRepository(
     }
 }
 
-// await helpers
+/** await helper for Tasks */
 private suspend fun <T> com.google.android.gms.tasks.Task<T>.await(): T =
     kotlinx.coroutines.suspendCancellableCoroutine { cont ->
         addOnCompleteListener { task ->

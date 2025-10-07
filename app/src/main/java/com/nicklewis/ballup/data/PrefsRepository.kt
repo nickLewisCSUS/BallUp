@@ -1,45 +1,62 @@
+// data/PrefsRepository.kt
 package com.nicklewis.ballup.data
 
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.flow.*
+import kotlin.coroutines.resumeWithException
 
-// Add the new flag here
-data class UserPrefs(
-    val runAlerts: Boolean = true,
-    val notifyWhileForeground: Boolean = false,
+data class CloudPrefs(
+    val runAlerts: Boolean = true // default when not signed in or doc missing
 )
 
 class PrefsRepository(
     private val db: FirebaseFirestore = FirebaseFirestore.getInstance(),
-    private val auth: FirebaseAuth = FirebaseAuth.getInstance()
+    private val auth: FirebaseAuth = FirebaseAuth.getInstance(),
 ) {
-    private fun uid(): String =
-        auth.currentUser?.uid ?: throw IllegalStateException("Not signed in")
+    /** Emits current UID or null as auth state changes (safe). */
+    private fun authUidFlow(): Flow<String?> = callbackFlow {
+        val l = FirebaseAuth.AuthStateListener { fa -> trySend(fa.currentUser?.uid) }
+        auth.addAuthStateListener(l)
+        trySend(auth.currentUser?.uid) // initial
+        awaitClose { auth.removeAuthStateListener(l) }
+    }
 
-    private fun doc() =
-        db.collection("users").document(uid()).collection("prefs").document("app")
-
-    // Now emit BOTH fields
-    fun listen(): Flow<UserPrefs> = callbackFlow {
-        val reg = doc().addSnapshotListener { snap, _ ->
+    /** Reads cloud prefs from users/{uid}/prefs/app (safe, emits defaults). */
+    private fun cloudPrefsFor(uid: String): Flow<CloudPrefs> = callbackFlow {
+        val ref = db.collection("users").document(uid)
+            .collection("prefs").document("app")
+        val reg = ref.addSnapshotListener { snap, _ ->
             val run = snap?.getBoolean("runAlerts") ?: true
-            val notifyFg = snap?.getBoolean("notifyWhileForeground") ?: false
-            trySend(UserPrefs(runAlerts = run, notifyWhileForeground = notifyFg))
+            trySend(CloudPrefs(runAlerts = run))
         }
         awaitClose { reg.remove() }
     }
 
-    suspend fun setRunAlerts(enabled: Boolean) {
-        doc().set(mapOf("runAlerts" to enabled), SetOptions.merge()).await()
-    }
+    /** Public stream: defaults when signed out; live doc when signed in. */
+    val cloudPrefs: Flow<CloudPrefs> =
+        authUidFlow().flatMapLatest { uid ->
+            if (uid == null) flowOf(CloudPrefs())
+            else cloudPrefsFor(uid)
+        }
 
-    // New setter
-    suspend fun setNotifyWhileForeground(enabled: Boolean) {
-        doc().set(mapOf("notifyWhileForeground" to enabled), SetOptions.merge()).await()
+    /** Optional: cloud setter for runAlerts (no-op if signed out). */
+    suspend fun setRunAlerts(enabled: Boolean) {
+        val uid = auth.currentUser?.uid ?: return
+        db.collection("users").document(uid)
+            .collection("prefs").document("app")
+            .set(mapOf("runAlerts" to enabled), SetOptions.merge())
+            .await()
     }
 }
+
+// tiny await helper (keep if you don’t already have one here)
+private suspend fun <T> com.google.android.gms.tasks.Task<T>.await(): T =
+    kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+        addOnCompleteListener { t ->
+            if (t.isSuccessful) cont.resume(t.result, null)
+            else cont.resumeWithException(t.exception ?: RuntimeException("Task failed"))
+        }
+    }

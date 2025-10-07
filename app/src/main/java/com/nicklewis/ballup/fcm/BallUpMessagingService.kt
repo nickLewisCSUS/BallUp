@@ -159,7 +159,8 @@ class BallUpMessagingService : FirebaseMessagingService() {
             return
         }
 
-        if (type == "run_created") {
+        // --- New run created / opened ---
+        if (type == "run_created" || type == "run_open") {
             val courtName = data["courtName"].orEmpty()
             val runId = data["runId"].orEmpty()
             val mode = data["mode"].orEmpty()
@@ -173,18 +174,19 @@ class BallUpMessagingService : FirebaseMessagingService() {
             val title = "New run at ${courtName.ifEmpty { "this court" }}"
             val text  = "$mode • up to $maxPlayers • starts $timeText"
 
-            // 1) In-app banner
+            // In-app banner (Snackbar overlay)
             NotifBus.emit(InAppAlert.RunCreated(title, courtName, runId, timeText))
 
-            // 2) System notif with your same foreground/permission logic
+            // System notification (same checks as before)
             postSystemNotificationIfAllowed(
-                channelId = "run_spots", // or "runs"
+                channelId = "runs",
                 title = title,
                 text = text,
                 deeplinkRunId = runId
             )
             return
         }
+
 
         // --- Fallback for notification-only messages (unchanged) ---
         val title = msg.notification?.title ?: "BallUp"

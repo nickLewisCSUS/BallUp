@@ -1,5 +1,6 @@
 package com.nicklewis.ballup.nav
 
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -31,7 +32,6 @@ import com.nicklewis.ballup.ui.settings.SettingsScreen
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
 import com.nicklewis.ballup.ui.runs.RunDetailsScreen
-import androidx.compose.runtime.LaunchedEffect
 
 const val ROUTE_RUN = "run/{runId}"
 
@@ -40,6 +40,11 @@ const val ROUTE_RUN = "run/{runId}"
 fun BallUpApp() {
 
     val nav = rememberNavController()
+    val items = listOf(Screen.Map, Screen.List, Screen.Settings)
+    var showAddCourt by remember { mutableStateOf(false) }
+    var showIndoor by rememberSaveable { mutableStateOf(true) }
+    var showOutdoor by rememberSaveable { mutableStateOf(true) }
+
 
     // set & clear the global holder so MainActivity can navigate from pushes
     DisposableEffect(nav) {
@@ -50,11 +55,6 @@ fun BallUpApp() {
             }
         }
     }
-
-    val items = listOf(Screen.Map, Screen.List, Screen.Settings)
-    var showAddCourt by remember { mutableStateOf(false) }
-    var showIndoor by rememberSaveable { mutableStateOf(true) }
-    var showOutdoor by rememberSaveable { mutableStateOf(true) }
 
     Scaffold(
         topBar = {
@@ -94,40 +94,40 @@ fun BallUpApp() {
             }
         }
     ) { padding ->
-        NavHost(
-            navController = nav,
-            startDestination = Screen.Map.route,
-            modifier = Modifier.padding(padding)
+
+        // Apply the scaffold's padding and status bar inset here
+        androidx.compose.foundation.layout.Box(
+            Modifier
+                .fillMaxSize()
+                .padding(padding)
         ) {
-            composable(Screen.Map.route) {
-                CourtsMapScreen(
-                    showIndoor = showIndoor,
-                    showOutdoor = showOutdoor,
-                    onToggleIndoor = { showIndoor = !showIndoor },
-                    onToggleOutdoor = { showOutdoor = !showOutdoor }
-                )
-            }
-            composable(Screen.List.route) {
-                CourtsListScreen()
-            }
-            composable(Screen.Settings.route) {
-                SettingsScreen()
+            NavHost(
+                navController = nav,
+                startDestination = Screen.Map.route,
+                modifier = Modifier.fillMaxSize()
+            ) {
+                composable(Screen.Map.route) {
+                    CourtsMapScreen(
+                        showIndoor = showIndoor,
+                        showOutdoor = showOutdoor,
+                        onToggleIndoor = { showIndoor = !showIndoor },
+                        onToggleOutdoor = { showOutdoor = !showOutdoor }
+                    )
+                }
+                composable(Screen.List.route) { CourtsListScreen() }
+                composable(Screen.Settings.route) { SettingsScreen() }
+                composable(
+                    route = ROUTE_RUN,
+                    arguments = listOf(navArgument("runId") { type = NavType.StringType })
+                ) { backStackEntry ->
+                    val runId = backStackEntry.arguments?.getString("runId")!!
+                    RunDetailsScreen(runId = runId, onBack = { nav.popBackStack() })
+                }
             }
 
-            // 3) ⬇️ Add this new route block right here
-            composable(
-                route = ROUTE_RUN,
-                arguments = listOf(navArgument("runId") { type = NavType.StringType })
-            ) { backStackEntry ->
-                val runId = backStackEntry.arguments?.getString("runId")!!
-                RunDetailsScreen(
-                    runId = runId,
-                    onBack = { nav.popBackStack() } // optional
-                )
-            }
+            // This sits above the NavHost
+            InAppAlertsOverlay(nav)
         }
-
-        InAppAlertsOverlay(nav)
     }
 
     if (showAddCourt) {

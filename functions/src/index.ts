@@ -15,6 +15,19 @@ function sanitizeTopicId(raw: string) {
   return raw.replace(/[^A-Za-z0-9_\-.]/g, "_");
 }
 
+// helpers at top of file (optional but handy)
+function tsMillis(x: any | undefined): number | null {
+  // Accepts Firestore Timestamp-like, Date, number, or undefined
+  if (!x) return null;
+  // Firestore Timestamp
+  if (typeof x?.toMillis === "function") return x.toMillis();
+  // JS Date
+  if (x instanceof Date) return x.getTime();
+  // number (assume ms)
+  if (typeof x === "number") return x;
+  return null;
+}
+
 async function getCourtName(courtId: string) {
   try {
     const snap = await admin.firestore().collection("courts").doc(courtId).get();
@@ -44,25 +57,47 @@ export const setCourtTopicSubscription = onCall(async (request) => {
 
 /** ---------- triggers: notify when a run starts ---------- */
 export const notifyRunCreatedActive = onDocumentCreated("runs/{runId}", async (event) => {
-  const run = event.data?.data() || {};
-  if (run.status !== "active") return;
+  const snap = event.data;
+  if (!snap) return;
+  const run = snap.data() as any;
+  if (run?.status !== "active") return;
 
+  const runId = run.runId || event.params.runId;
   const courtId = String(run.courtId ?? "");
   if (!courtId) return;
 
-  const courtName = (await getCourtName(courtId)) ?? (run.courtName ?? "A court");
+  const mode = String(run.mode ?? "5v5");
+  const maxPlayers = Number(run.maxPlayers ?? 10);
+
+  // Prefer startsAt, then startTime, then createdAt, then now
+  const startsAtMs =
+    tsMillis(run.startsAt) ??
+    tsMillis(run.startTime) ??
+    tsMillis(run.createdAt) ??
+    Date.now();
+
+  const courtName =
+    (await getCourtName(courtId)) ??
+    (run.courtName as string | undefined) ??
+    "A court";
+
   const topic = `court_${sanitizeTopicId(courtId)}`;
 
-  logger.info("notifyRunCreatedActive", { runId: event.params.runId, courtId, topic });
+  logger.info("notifyRunCreatedActive", { runId, courtId, topic });
 
+  // Send DATA message with rich fields (Android builds its own UI)
   await admin.messaging().send({
     topic,
     data: {
-      type: "run_open",
+      type: "run_created",
+      runId,
       courtId,
-      runId: event.params.runId,
       courtName,
+      mode,
+      maxPlayers: String(maxPlayers),
+      startsAt: String(startsAtMs),
     },
+    // Keep channel hint for older Android if it ever falls back to notif-only
     android: { priority: "high", notification: { channelId: "runs" } },
   });
 });
@@ -73,25 +108,44 @@ export const notifyRunBecameActive = onDocumentUpdated("runs/{runId}", async (ev
   const becameActive = before.status !== "active" && after.status === "active";
   if (!becameActive) return;
 
+  const runId = (after.runId as string) || event.params.runId;
   const courtId = String(after.courtId ?? "");
   if (!courtId) return;
 
-  const courtName = (await getCourtName(courtId)) ?? (after.courtName ?? "A court");
+  const mode = String(after.mode ?? "5v5");
+  const maxPlayers = Number(after.maxPlayers ?? 10);
+
+  // If it was scheduled, startsAt should already be set; otherwise fallbacks
+  const startsAtMs =
+    tsMillis(after.startsAt) ??
+    tsMillis(after.startTime) ??
+    tsMillis(after.createdAt) ??
+    Date.now();
+
+  const courtName =
+    (await getCourtName(courtId)) ??
+    (after.courtName as string | undefined) ??
+    "A court";
+
   const topic = `court_${sanitizeTopicId(courtId)}`;
 
-  logger.info("notifyRunBecameActive", { runId: event.params.runId, courtId, topic });
+  logger.info("notifyRunBecameActive", { runId, courtId, topic });
 
+  // Keep a visible notification for older clients, but also send DATA for new UI
   await admin.messaging().send({
     topic,
     notification: {
       title: "Run just started",
-      body: `${courtName} • ${(after.playerCount ?? 1)}/${(after.maxPlayers ?? 10)} players`,
+      body: `${courtName} • ${(after.playerCount ?? 1)}/${maxPlayers} players`,
     },
     data: {
-      type: "run_open",
+      type: "run_became_active",
+      runId,
       courtId,
-      runId: event.params.runId,
       courtName,
+      mode,
+      maxPlayers: String(maxPlayers),
+      startsAt: String(startsAtMs),
     },
     android: { priority: "high", notification: { channelId: "runs" } },
   });

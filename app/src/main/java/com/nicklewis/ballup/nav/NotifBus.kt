@@ -9,6 +9,18 @@ object NotifBus {
     fun emit(a: InAppAlert) { _events.tryEmit(a) }
 }
 
+// Add RunCreated alongside RunSpots
 sealed class InAppAlert {
-    data class RunSpots(val title: String, val subtitle: String, val runId: String) : InAppAlert()
+    data class RunSpots(
+        val title: String,
+        val subtitle: String,
+        val runId: String
+    ) : InAppAlert()
+
+    data class RunCreated(
+        val title: String,
+        val courtName: String,
+        val runId: String,
+        val timeText: String
+    ) : InAppAlert()
 }

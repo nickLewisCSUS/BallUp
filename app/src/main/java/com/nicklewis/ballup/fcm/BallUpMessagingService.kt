@@ -51,6 +51,51 @@ class BallUpMessagingService : FirebaseMessagingService() {
         }
     }
 
+    private fun postSystemNotificationIfAllowed(
+        channelId: String,
+        title: String,
+        text: String,
+        deeplinkRunId: String
+    ) {
+        val ctx = applicationContext
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            val allowWhileForeground = try {
+                com.nicklewis.ballup.data.LocalPrefsStore(ctx).prefsFlow.first().notifyWhileForeground
+            } catch (_: Throwable) { false }
+
+            val inForeground = applicationIsInForeground()
+            if (!inForeground || allowWhileForeground) {
+                val intent = android.content.Intent(ctx, com.nicklewis.ballup.MainActivity::class.java).apply {
+                    flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    putExtra("deeplink_runId", deeplinkRunId)
+                }
+                val pi = android.app.PendingIntent.getActivity(
+                    ctx, 1001, intent,
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                )
+                ensureChannel(channelId, "Run Alerts")
+                val notif = androidx.core.app.NotificationCompat.Builder(ctx, channelId)
+                    .setSmallIcon(notificationIcon())
+                    .setContentTitle(title)
+                    .setContentText(text)
+                    .setContentIntent(pi)
+                    .setAutoCancel(true)
+                    .build()
+
+                if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                    androidx.core.content.ContextCompat.checkSelfPermission(
+                        ctx, android.Manifest.permission.POST_NOTIFICATIONS
+                    ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) return@launch
+                val nm = androidx.core.app.NotificationManagerCompat.from(ctx)
+                if (!nm.areNotificationsEnabled()) return@launch
+
+                nm.notify(9001, notif)
+            }
+        }
+    }
+
+
     override fun onMessageReceived(msg: RemoteMessage) {
         android.util.Log.d("FCM", "onMessageReceived data=${msg.data} notif=${msg.notification}")
         val data = msg.data
@@ -111,6 +156,33 @@ class BallUpMessagingService : FirebaseMessagingService() {
                     NotificationManagerCompat.from(ctx).notify(9001, notif)
                 }
             }
+            return
+        }
+
+        if (type == "run_created") {
+            val courtName = data["courtName"].orEmpty()
+            val runId = data["runId"].orEmpty()
+            val mode = data["mode"].orEmpty()
+            val maxPlayers = data["maxPlayers"].orEmpty()
+            val startsAtMs = data["startsAt"]?.toLongOrNull()
+
+            val timeText = startsAtMs?.let {
+                android.text.format.DateFormat.format("EEE h:mm a", java.util.Date(it)).toString()
+            } ?: "now"
+
+            val title = "New run at ${courtName.ifEmpty { "this court" }}"
+            val text  = "$mode • up to $maxPlayers • starts $timeText"
+
+            // 1) In-app banner
+            NotifBus.emit(InAppAlert.RunCreated(title, courtName, runId, timeText))
+
+            // 2) System notif with your same foreground/permission logic
+            postSystemNotificationIfAllowed(
+                channelId = "run_spots", // or "runs"
+                title = title,
+                text = text,
+                deeplinkRunId = runId
+            )
             return
         }
 

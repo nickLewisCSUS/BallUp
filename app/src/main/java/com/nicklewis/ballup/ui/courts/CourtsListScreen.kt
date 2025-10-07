@@ -12,10 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -26,6 +23,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.nicklewis.ballup.ui.courts.components.CourtCard
 import com.nicklewis.ballup.ui.courts.components.SearchBarWithSuggestions
 import com.nicklewis.ballup.ui.courts.components.FilterBar
+import com.nicklewis.ballup.ui.courts.components.RunCreateDialog   // <-- import
 import com.nicklewis.ballup.util.fetchLastKnownLocation
 import com.nicklewis.ballup.util.hasLocationPermission
 import com.nicklewis.ballup.vm.StarsViewModel
@@ -39,10 +37,8 @@ import com.nicklewis.ballup.vm.PrefsViewModel
 fun CourtsListScreen(
     vm: CourtsListViewModel = viewModel(),
 ) {
-
     val starsVm: StarsViewModel = viewModel()
 
-    // location bootstrap
     val ctx = LocalContext.current
     val prefsVm: PrefsViewModel =
         androidx.lifecycle.viewmodel.compose.viewModel(factory = PrefsViewModel.factory(ctx))
@@ -51,11 +47,13 @@ fun CourtsListScreen(
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
-        val granted =
-            grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                    grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        val granted = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         if (granted) fetchLastKnownLocation(fused) { loc -> vm.userLoc = loc }
     }
+
+    // holds the courtId when the dialog is open
+    var showCreate by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         if (hasLocationPermission(ctx)) {
@@ -99,7 +97,7 @@ fun CourtsListScreen(
 
         vm.error?.let { Text("Error: $it", color = MaterialTheme.colorScheme.error) }
         if (vm.courts.isEmpty()) Text("No courts yet. Add one in Firestore to see it here.")
-        if (vm.rows.isEmpty())  Text("No courts match your filter.")
+        if (vm.rows.isEmpty()) Text("No courts match your filter.")
         else {
             LazyColumn(
                 modifier = Modifier.weight(1f),
@@ -111,20 +109,8 @@ fun CourtsListScreen(
                         uid = uid,
                         userLoc = vm.userLoc,
                         onStartRun = { courtId ->
-                            if (uid == null) { Log.e("Runs","startRun: not signed in"); return@CourtCard }
-                            scope.launch {
-                                try {
-                                    startRun(
-                                        db = db,
-                                        courtId = courtId,
-                                        hostUid = uid,
-                                        mode = "5v5",
-                                        maxPlayers = 10
-                                    )
-                                } catch (e: Exception) {
-                                    Log.e("Runs","startRun failed", e)
-                                }
-                            }
+                            // OPEN DIALOG (do NOT start immediately)
+                            showCreate = courtId
                         },
                         onJoinRun = { runId ->
                             if (uid == null) { Log.e("Runs","joinRun: not signed in"); return@CourtCard }
@@ -145,6 +131,35 @@ fun CourtsListScreen(
                     )
                 }
             }
+        }
+
+        // DIALOG (place after list so it can overlay)
+        showCreate?.let { courtId ->
+            RunCreateDialog(
+                onDismiss = { showCreate = null },
+                onCreate = { startsAt, endsAt, mode, max ->
+                    showCreate = null
+                    if (uid == null) {
+                        Log.e("Runs","startRun: not signed in")
+                        return@RunCreateDialog
+                    }
+                    scope.launch {
+                        try {
+                            startRun(
+                                db = db,
+                                courtId = courtId,
+                                hostUid = uid,
+                                mode = mode,
+                                maxPlayers = max,
+                                startsAtMillis = startsAt,
+                                endsAtMillis = endsAt
+                            )
+                        } catch (e: Exception) {
+                            Log.e("Runs","startRun failed", e)
+                        }
+                    }
+                }
+            )
         }
     }
 }

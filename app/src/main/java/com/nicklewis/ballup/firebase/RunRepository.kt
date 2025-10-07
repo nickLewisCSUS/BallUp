@@ -5,30 +5,46 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.nicklewis.ballup.model.Run
 import kotlinx.coroutines.tasks.await
 
-/** Creates a run immediately as active and includes the host as the first player. */
+/** Creates a run; if startsAtMillis is in the future, status = "scheduled". */
 suspend fun startRun(
     db: FirebaseFirestore,
     courtId: String,
     hostUid: String,
     mode: String = "5v5",
-    maxPlayers: Int = 10
+    maxPlayers: Int = 10,
+    startsAtMillis: Long? = null,   // NEW (null => now)
+    endsAtMillis: Long? = null      // NEW (optional)
 ): String {
     require(maxPlayers in 2..30) { "Max players must be between 2 and 30" }
 
     val ref = db.collection("runs").document()
-    val data = mapOf(
+
+    val now = System.currentTimeMillis()
+    val startsAt = startsAtMillis?.let { com.google.firebase.Timestamp(it / 1000, ((it % 1000) * 1_000_000).toInt()) }
+    val endsAt   = endsAtMillis?.let   { com.google.firebase.Timestamp(it / 1000, ((it % 1000) * 1_000_000).toInt()) }
+
+    val isFuture = startsAtMillis != null && startsAtMillis > now
+    val status = if (isFuture) "scheduled" else "active"
+
+    val data = mutableMapOf<String, Any?>(
         "runId" to ref.id,
         "courtId" to courtId,
-        "status" to "active",
-        "startTime" to FieldValue.serverTimestamp(),
+        "status" to status,
+        "startTime" to FieldValue.serverTimestamp(), // keep writing for BC
+        "startsAt" to (startsAt ?: FieldValue.serverTimestamp()),
+        "endsAt" to endsAt,
         "hostId" to hostUid,
         "mode" to mode,
         "maxPlayers" to maxPlayers,
+        "createdAt" to FieldValue.serverTimestamp(),
         "lastHeartbeatAt" to FieldValue.serverTimestamp(),
         "playerCount" to 1,
         "playerIds" to listOf(hostUid)
     )
-    ref.set(data).await()
+
+    // Remove nulls so Firestore doesn’t store them
+    val cleaned = data.filterValues { it != null }
+    ref.set(cleaned).await()
     return ref.id
 }
 

@@ -19,7 +19,6 @@ fun InAppAlertsOverlay(nav: NavHostController) {
     val snack = remember { SnackbarHostState() }
 
     Box(Modifier.fillMaxSize()) {
-        // anchor the banner at the top
         SnackbarHost(hostState = snack, modifier = Modifier.align(Alignment.TopCenter))
     }
 
@@ -29,6 +28,21 @@ fun InAppAlertsOverlay(nav: NavHostController) {
                 is InAppAlert.RunSpots -> {
                     val res = snack.showSnackbar(
                         message = "${evt.title} · ${evt.subtitle}",
+                        actionLabel = "View",
+                        withDismissAction = true,
+                        duration = SnackbarDuration.Short
+                    )
+                    if (res == SnackbarResult.ActionPerformed) {
+                        nav.navigate("run/${evt.runId}") {
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                }
+
+                is InAppAlert.RunCreated -> {
+                    val res = snack.showSnackbar(
+                        message = "${evt.title} · ${evt.courtName} • starts ${evt.timeText}",
                         actionLabel = "View",
                         withDismissAction = true,
                         duration = SnackbarDuration.Short

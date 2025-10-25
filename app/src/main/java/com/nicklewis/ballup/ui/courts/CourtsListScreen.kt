@@ -23,22 +23,24 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.nicklewis.ballup.ui.courts.components.CourtCard
 import com.nicklewis.ballup.ui.courts.components.SearchBarWithSuggestions
 import com.nicklewis.ballup.ui.courts.components.FilterBar
-import com.nicklewis.ballup.ui.courts.components.RunCreateDialog
 import com.nicklewis.ballup.util.fetchLastKnownLocation
 import com.nicklewis.ballup.util.hasLocationPermission
 import com.nicklewis.ballup.vm.StarsViewModel
-import com.nicklewis.ballup.firebase.startRun
 import com.nicklewis.ballup.firebase.joinRun
 import com.nicklewis.ballup.firebase.leaveRun
 import kotlinx.coroutines.launch
 import com.nicklewis.ballup.vm.PrefsViewModel
 import com.nicklewis.ballup.nav.AppNavControllerHolder
+import com.nicklewis.ballup.ui.courts.components.StartRunDialog
+import com.nicklewis.ballup.ui.runs.RunsViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
 
 @Composable
 fun CourtsListScreen(
     vm: CourtsListViewModel = viewModel(),
 ) {
     val starsVm: StarsViewModel = viewModel()
+    val runsViewModel: RunsViewModel = viewModel()
 
     val ctx = LocalContext.current
     val prefsVm: PrefsViewModel =
@@ -130,31 +132,14 @@ fun CourtsListScreen(
             }
         }
 
-        // DIALOG (place after list so it can overlay)
         showCreate?.let { courtId ->
-            RunCreateDialog(
+            StartRunDialog(
+                visible = true,
+                courtId = courtId,
                 onDismiss = { showCreate = null },
-                onCreate = { startsAt, endsAt, mode, max ->
+                onCreate = { run ->
+                    runsViewModel.createRunFromDialog(run)
                     showCreate = null
-                    if (uid == null) {
-                        Log.e("Runs","startRun: not signed in")
-                        return@RunCreateDialog
-                    }
-                    scope.launch {
-                        try {
-                            startRun(
-                                db = db,
-                                courtId = courtId,
-                                hostUid = uid,
-                                mode = mode,
-                                maxPlayers = max,
-                                startsAtMillis = startsAt,
-                                endsAtMillis = endsAt
-                            )
-                        } catch (e: Exception) {
-                            Log.e("Runs","startRun failed", e)
-                        }
-                    }
                 }
             )
         }

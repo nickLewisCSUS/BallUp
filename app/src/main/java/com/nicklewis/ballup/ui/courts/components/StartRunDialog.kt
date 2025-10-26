@@ -17,10 +17,40 @@ fun StartRunDialog(
     visible: Boolean,
     courtId: String,
     onDismiss: () -> Unit,
-    onCreate: (Run) -> Unit,           // <-- returns your Run model
+    onCreate: (Run) -> Unit,
 ) {
     if (!visible) return
 
+    // --- NEW: name state & helpers ---
+    val nameMax = 30
+    var nameText by remember { mutableStateOf("") }
+
+    // Allow letters, numbers, spaces, and a few common punctuation marks
+    val allowedNameRegex = Regex("""^[\p{L}\p{N}\s'’\-_.!?:()]+$""")
+
+    // Very small blocklist to start (server should also validate)
+    val badWords = remember {
+        listOf(
+            "fuck","shit","bitch","asshole","cunt","slut","whore","nigger","fag",
+            "retard","kike","spic","chink","twat","cock","dick"
+        )
+    }
+
+    fun normalizeRunName(raw: String): String =
+        raw.trim().replace(Regex("\\s+"), " ")
+
+    fun containsProfanity(s: String): Boolean {
+        val lc = s.lowercase()
+        return badWords.any { w -> Regex("""\b${Regex.escape(w)}\b""").containsMatchIn(lc) }
+    }
+
+    val nameNormalized = normalizeRunName(nameText)
+    val nameLenOk = nameNormalized.length in 3..nameMax
+    val nameCharsOk = nameNormalized.isEmpty() || allowedNameRegex.matches(nameNormalized)
+    val nameCleanOk = nameNormalized.isEmpty() || !containsProfanity(nameNormalized)
+    val nameValid = nameLenOk && nameCharsOk && nameCleanOk
+
+    // --- existing state (mode, capacity, times) remains unchanged ---
     val modes = listOf("5v5", "4v4", "3v3", "2v2", "Open gym")
     var mode by remember { mutableStateOf(modes.first()) }
 
@@ -31,14 +61,13 @@ fun StartRunDialog(
     var capacityText by remember { mutableStateOf(defaultCapacityFor(mode).toString()) }
     var userTouchedCapacity by remember { mutableStateOf(false) }
     fun capInt() = capacityText.toIntOrNull() ?: 0
-
     LaunchedEffect(mode) { if (!userTouchedCapacity) capacityText = defaultCapacityFor(mode).toString() }
 
     val now = remember { LocalDateTime.now().withSecond(0).withNano(0) }
-    val minStart = now.plusMinutes(10)               // must start ≥ 10 min from now
+    val minStart = now.plusMinutes(10)
     val maxStart = now.plusMonths(3)
-    val earliestDate = now.toLocalDate()           // today
-    val latestDate = now.toLocalDate().plusYears(1) // one year from now
+    val earliestDate = now.toLocalDate()
+    val latestDate = now.toLocalDate().plusYears(1)
 
     var startAt by remember { mutableStateOf(now.plusMinutes(15)) }
     var endAt   by remember { mutableStateOf(now.plusMinutes(15 + 90)) }
@@ -55,7 +84,8 @@ fun StartRunDialog(
                 startAt.isBefore(maxStart) &&
                 endAt.isAfter(startAt.plusMinutes(15)) &&
                 endAt.isBefore(startAt.plusHours(24))
-    val formValid = capValid && timeValid
+
+    val formValid = capValid && timeValid && nameValid
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -63,17 +93,17 @@ fun StartRunDialog(
             TextButton(
                 enabled = formValid,
                 onClick = {
-                    // Convert LocalDateTime -> Firebase Timestamp
                     val zone = ZoneId.systemDefault()
                     val run = Run(
                         courtId    = courtId,
                         status     = "active",
                         startsAt   = Timestamp(startAt.atZone(zone).toInstant().epochSecond, 0),
                         endsAt     = Timestamp(endAt.atZone(zone).toInstant().epochSecond, 0),
-                        hostId     = null,        // set in ViewModel
+                        hostId     = null,
                         mode       = mode,
                         maxPlayers = capInt(),
-                        playerIds  = emptyList()   // set in ViewModel
+                        playerIds  = emptyList(),
+                        name       = normalizeRunName(nameText)    // <-- NEW
                     )
                     onCreate(run)
                 }
@@ -84,7 +114,33 @@ fun StartRunDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
 
-                // Mode dropdown
+                // --- NEW: Run Name input with counter & validation ---
+                OutlinedTextField(
+                    value = nameText,
+                    onValueChange = { input ->
+                        // Enforce character whitelist & length progressively as user types
+                        val filtered = input.filter { ch ->
+                            ch.isLetterOrDigit() || ch.isWhitespace() || "'’-_ .!?:()".contains(ch)
+                        }.take(nameMax)
+                        nameText = filtered
+                    },
+                    label = { Text("Run name") },
+                    singleLine = true,
+                    isError = nameText.isNotEmpty() && !nameValid,
+                    supportingText = {
+                        val remaining = (nameMax - nameNormalized.length).coerceAtLeast(0)
+                        when {
+                            nameText.isEmpty() -> Text("$nameMax characters max")
+                            !nameLenOk -> Text("Name must be 3–$nameMax characters")
+                            !nameCharsOk -> Text("Only letters, numbers, spaces, and - _ . ! ? : ( ) ' allowed")
+                            !nameCleanOk -> Text("Please choose a different name")
+                            else -> Text("$remaining left")
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Mode dropdown … (unchanged)
                 var expanded by remember { mutableStateOf(false) }
                 ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
                     OutlinedTextField(
@@ -102,7 +158,7 @@ fun StartRunDialog(
                     }
                 }
 
-                // Capacity
+                // Capacity … (unchanged)
                 OutlinedTextField(
                     value = capacityText,
                     onValueChange = {
@@ -115,6 +171,7 @@ fun StartRunDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                // Date/Time pickers … (unchanged)
                 OutlinedButton(onClick = { showStartDate = true }, modifier = Modifier.fillMaxWidth()) {
                     Text("Start Date: ${startAt.toLocalDate()}")
                 }
@@ -127,23 +184,14 @@ fun StartRunDialog(
 
                 if (!timeValid) {
                     val msg = when {
-                        startAt.isBefore(minStart) ->
-                            "Start time must be at least 10 minutes from now."
-                        startAt.isAfter(maxStart) ->
-                            "Start date can’t be more than 3 months ahead."
-                        !endAt.isAfter(startAt.plusMinutes(15)) ->
-                            "End time must be at least 15 minutes after start."
-                        !endAt.isBefore(startAt.plusHours(24)) ->
-                            "Run can’t last more than 24 hours."
+                        startAt.isBefore(minStart) -> "Start time must be at least 10 minutes from now."
+                        startAt.isAfter(maxStart) -> "Start date can’t be more than 3 months ahead."
+                        !endAt.isAfter(startAt.plusMinutes(15)) -> "End time must be at least 15 minutes after start."
+                        !endAt.isBefore(startAt.plusHours(24)) -> "Run can’t last more than 24 hours."
                         else -> "Invalid time selection."
                     }
-                    Text(
-                        msg,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                    Text(msg, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
-
             }
         }
     )

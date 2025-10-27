@@ -16,8 +16,9 @@ import com.nicklewis.ballup.util.distanceKm
 import com.nicklewis.ballup.util.kmToMiles
 import com.nicklewis.ballup.vm.PrefsViewModel
 import com.nicklewis.ballup.vm.StarsViewModel
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
-// CourtCard.kt
 @Composable
 fun CourtCard(
     row: CourtRow,
@@ -68,6 +69,40 @@ fun CourtCard(
                 )
             }
 
+            // --- NEW: show run name and time window if available ---
+            currentRun?.let { r ->
+                if (!r.name.isNullOrBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = r.name!!,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                val start = r.startsAt
+                val end = r.endsAt
+                if (start != null && end != null) {
+                    val zone = ZoneId.systemDefault()
+                    val s = start.toDate().toInstant().atZone(zone).toLocalDateTime()
+                    val e = end.toDate().toInstant().atZone(zone).toLocalDateTime()
+                    val tFmt = DateTimeFormatter.ofPattern("h:mm a")
+                    val dFmt = DateTimeFormatter.ofPattern("EEE, MMM d")
+                    val window = if (s.toLocalDate() == e.toLocalDate())
+                        "${dFmt.format(s)} • ${tFmt.format(s)}–${tFmt.format(e)}"
+                    else
+                        "${dFmt.format(s)} ${tFmt.format(s)} → ${dFmt.format(e)} ${tFmt.format(e)}"
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = window,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // --- Court info ---
+            Spacer(Modifier.height(6.dp))
             Text("${court.type?.uppercase().orEmpty()} • ${court.address.orEmpty()}")
 
             court.geo?.lat?.let { lat ->
@@ -87,9 +122,7 @@ fun CourtCard(
                 val alreadyIn = uid != null && (currentRun.playerIds?.contains(uid) == true)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     // Primary action
-                    Button(
-                        onClick = { runId?.let(onViewRun) }  // 👈 always allow viewing active run
-                    ) { Text("View run") }
+                    Button(onClick = { runId?.let(onViewRun) }) { Text("View run") }
 
                     // Secondary action depends on membership
                     if (!alreadyIn) {

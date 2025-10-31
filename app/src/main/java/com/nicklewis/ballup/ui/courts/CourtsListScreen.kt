@@ -138,8 +138,11 @@ fun CourtsListScreen(
                 courtId = courtId,
                 onDismiss = { showCreate = null },
                 onCreate = { run ->
-                    runsViewModel.createRunFromDialog(run)
-                    showCreate = null
+                    runsViewModel.createRunWithCapacity(
+                        run = run,
+                        onSuccess = { showCreate = null },               // close dialog
+                        onError = { e -> Log.e("RunsVM", "create failed", e) } // toast/snackbar if you want
+                    )
                 }
             )
         }

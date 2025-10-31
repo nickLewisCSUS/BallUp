@@ -7,6 +7,7 @@ data class Court(
     var type: String? = null,          // "indoor" | "outdoor"
     var address: String? = null,
     var geo: Geo? = null,
+    var surfaces: Int? = null,
     var amenities: Amenities? = null,
     var createdAt: Timestamp? = null,
     var createdBy: String? = null

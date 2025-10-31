@@ -3,12 +3,42 @@ package com.nicklewis.ballup.util
 import com.google.android.gms.maps.model.LatLng
 import com.nicklewis.ballup.model.Court
 import com.nicklewis.ballup.model.Run
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
-data class CourtRow(
-    val courtId: String,
-    val court: Court,
-    val active: Pair<String, Run>? // (runId, Run)
+// ----- helpers (file-private) -----
+
+private fun maxConcurrentFor(court: Court): Int {
+    val surfaces = (court.surfaces ?: 1).coerceAtLeast(1)
+    return when {
+        surfaces <= 1 -> 1
+        surfaces <= 3 -> 2
+        else -> 3
+    }
+}
+
+private fun scoreForListing(nowMs: Long, r: Run): Long {
+    val s = r.startsAt?.toDate()?.time ?: Long.MAX_VALUE
+    val e = r.endsAt?.toDate()?.time ?: s
+    // Lower is better: live now first, then starts soonest
+    return when {
+        nowMs in s..e -> 0L
+        s >= nowMs    -> (s - nowMs)
+        else          -> Long.MAX_VALUE / 2
+    }
+}
+
+private fun toRowRun(id: String, r: Run) = RowRun(
+    id = id,
+    name = r.name,
+    startsAt = r.startsAt,
+    endsAt = r.endsAt,
+    playerCount = r.playerCount,
+    maxPlayers = r.maxPlayers,
+    playerIds = r.playerIds ?: emptyList()
 )
+
+// ----- single public API used by CourtsListViewModel -----
 
 fun buildSortedCourtRows(
     filtered: List<Pair<String, Court>>,
@@ -16,20 +46,41 @@ fun buildSortedCourtRows(
     sortMode: SortMode,
     userLoc: LatLng?
 ): List<CourtRow> {
-    // courtId -> (runId, Run)
-    val activeByCourtId: Map<String, Pair<String, Run>> =
+
+    val nowMs = System.currentTimeMillis()
+    val soonCutoff = Instant.ofEpochMilli(nowMs).plus(6, ChronoUnit.HOURS).toEpochMilli()
+
+    // group active runs by courtId
+    val runsByCourt: Map<String, List<Pair<String, Run>>> =
         runs.asSequence()
             .filter { it.second.status == "active" }
-            .mapNotNull { pair ->
-                val courtId = pair.second.courtId
-                if (courtId != null) courtId to pair else null
-            }
-            .toMap()
+            .filter { (_, r) -> r.courtId != null }
+            .groupBy { it.second.courtId!! }
 
-    val rows = filtered.map { (courtId, court) ->
-        CourtRow(courtId, court, activeByCourtId[courtId])
+    val rows: List<CourtRow> = filtered.map { (courtId, court) ->
+        val maxN = maxConcurrentFor(court)
+        val courtRuns = runsByCourt[courtId]
+            .orEmpty()
+            // keep live now or starting within next 6h
+            .filter { (_, r) ->
+                val s = r.startsAt?.toDate()?.time
+                val e = r.endsAt?.toDate()?.time ?: s
+                if (s == null) false else (nowMs in s..(e ?: s)) || (s in nowMs..soonCutoff)
+            }
+            .sortedBy { (_, r) -> scoreForListing(nowMs, r) }
+
+        val top = courtRuns.take(maxN).map { (id, r) -> toRowRun(id, r) }
+        val more = (courtRuns.size - top.size).coerceAtLeast(0)
+
+        CourtRow(
+            courtId = courtId,
+            court = court,
+            runsForCard = top,
+            moreRunsCount = more
+        )
     }
 
+    // final sorting (same modes you had before)
     return when (sortMode) {
         SortMode.CLOSEST -> rows.sortedBy { row ->
             val lat = row.court.geo?.lat; val lng = row.court.geo?.lng
@@ -38,10 +89,10 @@ fun buildSortedCourtRows(
             else Double.POSITIVE_INFINITY
         }
         SortMode.MOST_PLAYERS -> rows.sortedByDescending { row ->
-            row.active?.second?.playerCount ?: 0
+            row.runsForCard.maxOfOrNull { it.playerCount } ?: 0
         }
         SortMode.NEWEST -> rows.sortedByDescending { row ->
-            row.active?.second?.startTime?.toDate()?.time ?: 0L
+            row.runsForCard.maxOfOrNull { it.startsAt?.toDate()?.time ?: 0L } ?: 0L
         }
     }
 }

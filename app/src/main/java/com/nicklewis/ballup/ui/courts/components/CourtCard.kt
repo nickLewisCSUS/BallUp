@@ -9,16 +9,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.google.android.gms.maps.model.LatLng
 import com.nicklewis.ballup.data.CourtLite
-import com.nicklewis.ballup.model.Court
 import com.nicklewis.ballup.ui.components.StarButton
 import com.nicklewis.ballup.util.CourtRow
 import com.nicklewis.ballup.util.distanceKm
 import com.nicklewis.ballup.util.kmToMiles
 import com.nicklewis.ballup.vm.PrefsViewModel
 import com.nicklewis.ballup.vm.StarsViewModel
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
+import com.nicklewis.ballup.nav.AppNavControllerHolder
 
+// ui/courts/components/CourtCard.kt
 @Composable
 fun CourtCard(
     row: CourtRow,
@@ -32,103 +31,67 @@ fun CourtCard(
     prefsVm: PrefsViewModel,
 ) {
     val courtId = row.courtId
-    val court: Court = row.court
-    val runId = row.active?.first
-    val currentRun = row.active?.second
-
+    val court = row.court
     val starred by starsVm.starred.collectAsState()
     val prefs by prefsVm.prefs.collectAsState()
 
-    val courtLite = CourtLite(
-        id = row.courtId,
-        name = row.court.name,
-        lat = row.court.geo?.lat,
-        lng = row.court.geo?.lng
-    )
-
     ElevatedCard {
         Column(Modifier.padding(12.dp)) {
+
+            // Header row
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(court.name.orEmpty(), style = MaterialTheme.typography.titleMedium)
-
-                currentRun?.let { r ->
-                    val open = (r.maxPlayers - r.playerCount).coerceAtLeast(0)
-                    val label = when {
-                        open > 0 -> "Open • $open left"
-                        r.playerCount >= r.maxPlayers -> "Full"
-                        else -> "Active"
-                    }
-                    AssistChip(onClick = {}, label = { Text(label) })
-                }
-
+                Spacer(Modifier.weight(1f))
                 StarButton(
-                    checked = starred.contains(row.courtId),
+                    checked = starred.contains(courtId),
                     onCheckedChange = { v ->
-                        starsVm.toggle(courtLite, v, runAlertsEnabled = prefs.runAlerts)
+                        val lite = CourtLite(courtId, court.name, court.geo?.lat, court.geo?.lng)
+                        starsVm.toggle(lite, v, runAlertsEnabled = prefs.runAlerts)
                     }
                 )
             }
 
-            // --- NEW: show run name and time window if available ---
-            currentRun?.let { r ->
-                if (!r.name.isNullOrBlank()) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = r.name!!,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+            Spacer(Modifier.height(6.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (row.runsForCard.isNotEmpty()) {
+                    row.runsForCard.forEach { rr ->
+                        RunRow(
+                            rr = rr,
+                            currentUid = uid,
+                            onView = { onViewRun(rr.id) },
+                            onJoin = { onJoinRun(rr.id) },
+                            onLeave = { onLeaveRun(rr.id) }
+                        )
+                    }
                 }
 
-                val start = r.startsAt
-                val end = r.endsAt
-                if (start != null && end != null) {
-                    val zone = ZoneId.systemDefault()
-                    val s = start.toDate().toInstant().atZone(zone).toLocalDateTime()
-                    val e = end.toDate().toInstant().atZone(zone).toLocalDateTime()
-                    val tFmt = DateTimeFormatter.ofPattern("h:mm a")
-                    val dFmt = DateTimeFormatter.ofPattern("EEE, MMM d")
-                    val window = if (s.toLocalDate() == e.toLocalDate())
-                        "${dFmt.format(s)} • ${tFmt.format(s)}–${tFmt.format(e)}"
-                    else
-                        "${dFmt.format(s)} ${tFmt.format(s)} → ${dFmt.format(e)} ${tFmt.format(e)}"
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = window,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                // Always show buttons below
+                TextButton(
+                    onClick = { AppNavControllerHolder.navController?.navigate("court/${row.courtId}/runs") }
+                ) {
+                    Text("See all runs")
                 }
+
+                Button(
+                    onClick = { onStartRun(courtId) },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Start run") }
             }
 
-            // --- Court info ---
-            Spacer(Modifier.height(6.dp))
-            Text("${court.type?.uppercase().orEmpty()} • ${court.address.orEmpty()}")
 
+            Spacer(Modifier.height(4.dp))
+            TextButton(onClick = {
+                AppNavControllerHolder.navController?.navigate("court/${row.courtId}/runs")
+            }) { Text("See all runs") }
+
+            // Court meta (type, address, distance)
+            Spacer(Modifier.height(10.dp))
+            Text("${court.type?.uppercase().orEmpty()} • ${court.address.orEmpty()}")
             court.geo?.lat?.let { lat ->
                 court.geo?.lng?.let { lng ->
                     userLoc?.let {
                         val mi = kmToMiles(distanceKm(it.latitude, it.longitude, lat, lng))
                         Text(String.format("%.1f mi away", mi), style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            if (currentRun == null) {
-                Button(onClick = { onStartRun(courtId) }) { Text("Start run") }
-            } else {
-                val alreadyIn = uid != null && (currentRun.playerIds?.contains(uid) == true)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Primary action
-                    Button(onClick = { runId?.let(onViewRun) }) { Text("View run") }
-
-                    // Secondary action depends on membership
-                    if (!alreadyIn) {
-                        OutlinedButton(onClick = { runId?.let(onJoinRun) }) { Text("Join") }
-                    } else {
-                        OutlinedButton(onClick = { runId?.let(onLeaveRun) }) { Text("Leave") }
                     }
                 }
             }

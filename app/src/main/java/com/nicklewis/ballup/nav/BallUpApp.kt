@@ -45,7 +45,6 @@ fun BallUpApp() {
     var showIndoor by rememberSaveable { mutableStateOf(true) }
     var showOutdoor by rememberSaveable { mutableStateOf(true) }
 
-
     // set & clear the global holder so MainActivity can navigate from pushes
     DisposableEffect(nav) {
         AppNavControllerHolder.navController = nav
@@ -55,7 +54,6 @@ fun BallUpApp() {
             }
         }
     }
-
     Scaffold(
         topBar = {
             val title = when (currentRoute(nav)) {
@@ -123,8 +121,13 @@ fun BallUpApp() {
                     val runId = backStackEntry.arguments?.getString("runId")!!
                     RunDetailsScreen(runId = runId, onBack = { nav.popBackStack() })
                 }
-            }
 
+                //
+                composable("court/{courtId}/runs") { backStack ->
+                    val courtId = backStack.arguments?.getString("courtId") ?: return@composable
+                    com.nicklewis.ballup.ui.courts.CourtRunsScreen(courtId = courtId)
+                }
+            }
             // This sits above the NavHost
             InAppAlertsOverlay(nav)
         }

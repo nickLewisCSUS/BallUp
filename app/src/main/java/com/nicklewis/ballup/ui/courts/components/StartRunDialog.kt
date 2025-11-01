@@ -18,6 +18,7 @@ fun StartRunDialog(
     courtId: String,
     onDismiss: () -> Unit,
     onCreate: (Run) -> Unit,
+    errorMessage: String? = null,   // NEW: inline error text from screen
 ) {
     if (!visible) return
 
@@ -114,7 +115,7 @@ fun StartRunDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
 
-                // --- NEW: Run Name input with counter & validation ---
+                // --- Run Name input with counter & validation ---
                 OutlinedTextField(
                     value = nameText,
                     onValueChange = { input ->
@@ -192,6 +193,15 @@ fun StartRunDialog(
                     }
                     Text(msg, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
+
+                // --- NEW: inline server-side error (capacity/limits/etc.) ---
+                if (!errorMessage.isNullOrBlank()) {
+                    Text(
+                        text = errorMessage,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
             }
         }
     )
@@ -261,8 +271,6 @@ fun StartRunDialog(
             showStartDate = false
         }
     )
-
-
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -317,9 +325,9 @@ fun StartDatePickerDialog(
             TextButton(onClick = {
                 val millis = state.selectedDateMillis
                 if (millis != null) {
-                    // 🛠 interpret selection at UTC midnight to avoid TZ back-shift
+                    // interpret selection at UTC midnight to avoid TZ back-shift
                     val pickedUtcDate = java.time.Instant.ofEpochMilli(millis)
-                        .atZone(java.time.ZoneOffset.UTC)   // <-- key change
+                        .atZone(java.time.ZoneOffset.UTC)
                         .toLocalDate()
 
                     // clamp date to [minDate, maxDate]
@@ -341,13 +349,8 @@ fun StartDatePickerDialog(
             }) { Text("OK") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-        // helps avoid cramped/jumbled calendar on some devices/font scales
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
     ) {
         DatePicker(state = state, showModeToggle = true)
     }
 }
-
-
-
-

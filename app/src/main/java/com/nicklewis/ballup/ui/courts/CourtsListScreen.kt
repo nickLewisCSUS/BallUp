@@ -20,20 +20,19 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.android.gms.location.LocationServices
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
-import com.nicklewis.ballup.ui.courts.components.CourtCard
-import com.nicklewis.ballup.ui.courts.components.SearchBarWithSuggestions
-import com.nicklewis.ballup.ui.courts.components.FilterBar
-import com.nicklewis.ballup.util.fetchLastKnownLocation
-import com.nicklewis.ballup.util.hasLocationPermission
-import com.nicklewis.ballup.vm.StarsViewModel
 import com.nicklewis.ballup.firebase.joinRun
 import com.nicklewis.ballup.firebase.leaveRun
-import kotlinx.coroutines.launch
-import com.nicklewis.ballup.vm.PrefsViewModel
 import com.nicklewis.ballup.nav.AppNavControllerHolder
+import com.nicklewis.ballup.ui.courts.components.CourtCard
+import com.nicklewis.ballup.ui.courts.components.FilterBar
+import com.nicklewis.ballup.ui.courts.components.SearchBarWithSuggestions
 import com.nicklewis.ballup.ui.courts.components.StartRunDialog
 import com.nicklewis.ballup.ui.runs.RunsViewModel
-import androidx.lifecycle.viewmodel.compose.viewModel
+import com.nicklewis.ballup.util.fetchLastKnownLocation
+import com.nicklewis.ballup.util.hasLocationPermission
+import com.nicklewis.ballup.vm.PrefsViewModel
+import com.nicklewis.ballup.vm.StarsViewModel
+import kotlinx.coroutines.launch
 
 @Composable
 fun CourtsListScreen(
@@ -44,7 +43,7 @@ fun CourtsListScreen(
 
     val ctx = LocalContext.current
     val prefsVm: PrefsViewModel =
-        androidx.lifecycle.viewmodel.compose.viewModel(factory = PrefsViewModel.factory(ctx))
+        viewModel(factory = PrefsViewModel.factory(ctx))
     val fused = remember { LocationServices.getFusedLocationProviderClient(ctx) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -57,6 +56,8 @@ fun CourtsListScreen(
 
     // holds the courtId when the dialog is open
     var showCreate by remember { mutableStateOf<String?>(null) }
+    // NEW: holds inline error for the dialog
+    var dialogError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         if (hasLocationPermission(ctx)) {
@@ -111,7 +112,10 @@ fun CourtsListScreen(
                         row = row,
                         uid = uid,
                         userLoc = vm.userLoc,
-                        onStartRun = { courtId -> showCreate = courtId },
+                        onStartRun = { courtId ->
+                            dialogError = null
+                            showCreate = courtId
+                        },
                         onJoinRun = { runId ->
                             if (uid == null) { Log.e("Runs","joinRun: not signed in"); return@CourtCard }
                             scope.launch { try { joinRun(db, runId, uid) } catch (e: Exception) { Log.e("Runs","joinRun failed", e) } }
@@ -136,15 +140,47 @@ fun CourtsListScreen(
             StartRunDialog(
                 visible = true,
                 courtId = courtId,
-                onDismiss = { showCreate = null },
+                onDismiss = {
+                    dialogError = null
+                    showCreate = null
+                },
                 onCreate = { run ->
                     runsViewModel.createRunWithCapacity(
                         run = run,
-                        onSuccess = { showCreate = null },               // close dialog
-                        onError = { e -> Log.e("RunsVM", "create failed", e) } // toast/snackbar if you want
+                        onSuccess = {
+                            dialogError = null
+                            showCreate = null
+                        },
+                        onError = { e ->
+                            Log.e("RunsVM", "create failed", e)
+                            dialogError = humanizeCreateRunError(e) // show message inside dialog
+                        }
                     )
-                }
+                },
+                errorMessage = dialogError
             )
         }
+    }
+}
+
+/** UI-only mapper that turns technical exceptions into friendly messages shown to users. */
+private fun humanizeCreateRunError(t: Throwable): String {
+    val msg = t.message ?: ""
+    return when {
+        "all surfaces are in use" in msg -> "This court is full at that time — all surfaces are in use."
+        "Daily host limit" in msg        -> "Daily host limit reached for this court."
+        "maximum number of upcoming runs" in msg ->
+            "You already have the maximum number of upcoming runs scheduled."
+        "Not signed in" in msg           -> "You must be signed in to create a run."
+        "Missing courtId" in msg         -> "Couldn’t create run: court is missing."
+        "Missing start" in msg           -> "Please pick a start time."
+        "Missing end" in msg             -> "Please pick an end time."
+
+        // Firestore index / permission style errors (optional catch-all):
+        msg.contains("FAILED_PRECONDITION", ignoreCase = true) &&
+                msg.contains("index", ignoreCase = true) ->
+            "Run search needs to finish setting up. Try again in a moment."
+
+        else -> "Couldn't start the run. Please adjust the time or try again."
     }
 }

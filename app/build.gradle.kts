@@ -88,6 +88,7 @@ dependencies {
 
     // TimePicker is in Material3 1.2.x+
     implementation("androidx.compose.material3:material3:1.2.1")
+    implementation(libs.foundation)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

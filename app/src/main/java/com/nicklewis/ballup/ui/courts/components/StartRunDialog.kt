@@ -1,15 +1,20 @@
+// ui/courts/components/StartRunDialog.kt
 package com.nicklewis.ballup.ui.courts.components
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
+import com.google.firebase.Timestamp
+import com.nicklewis.ballup.model.Run
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import com.google.firebase.Timestamp
-import com.nicklewis.ballup.model.Run
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -18,28 +23,26 @@ fun StartRunDialog(
     courtId: String,
     onDismiss: () -> Unit,
     onCreate: (Run) -> Unit,
-    errorMessage: String? = null,   // NEW: inline error text from screen
+    errorMessage: String? = null,   // inline error text from screen
 ) {
     if (!visible) return
 
-    // --- NEW: name state & helpers ---
+    // --- Submit guard to prevent double-taps ---
+    var submitting by remember { mutableStateOf(false) }
+    LaunchedEffect(errorMessage) { if (!errorMessage.isNullOrBlank()) submitting = false }
+
+    // --- Name state & helpers ---
     val nameMax = 30
     var nameText by remember { mutableStateOf("") }
 
-    // Allow letters, numbers, spaces, and a few common punctuation marks
     val allowedNameRegex = Regex("""^[\p{L}\p{N}\s'’\-_.!?:()]+$""")
-
-    // Very small blocklist to start (server should also validate)
     val badWords = remember {
         listOf(
             "fuck","shit","bitch","asshole","cunt","slut","whore","nigger","fag",
             "retard","kike","spic","chink","twat","cock","dick"
         )
     }
-
-    fun normalizeRunName(raw: String): String =
-        raw.trim().replace(Regex("\\s+"), " ")
-
+    fun normalizeRunName(raw: String) = raw.trim().replace(Regex("\\s+"), " ")
     fun containsProfanity(s: String): Boolean {
         val lc = s.lowercase()
         return badWords.any { w -> Regex("""\b${Regex.escape(w)}\b""").containsMatchIn(lc) }
@@ -51,7 +54,7 @@ fun StartRunDialog(
     val nameCleanOk = nameNormalized.isEmpty() || !containsProfanity(nameNormalized)
     val nameValid = nameLenOk && nameCharsOk && nameCleanOk
 
-    // --- existing state (mode, capacity, times) remains unchanged ---
+    // --- Mode / capacity ---
     val modes = listOf("5v5", "4v4", "3v3", "2v2", "Open gym")
     var mode by remember { mutableStateOf(modes.first()) }
 
@@ -64,6 +67,7 @@ fun StartRunDialog(
     fun capInt() = capacityText.toIntOrNull() ?: 0
     LaunchedEffect(mode) { if (!userTouchedCapacity) capacityText = defaultCapacityFor(mode).toString() }
 
+    // --- Time state & validation (original flow) ---
     val now = remember { LocalDateTime.now().withSecond(0).withNano(0) }
     val minStart = now.plusMinutes(10)
     val maxStart = now.plusMonths(3)
@@ -74,7 +78,7 @@ fun StartRunDialog(
     var endAt   by remember { mutableStateOf(now.plusMinutes(15 + 90)) }
     var showStart by remember { mutableStateOf(false) }
     var showEnd   by remember { mutableStateOf(false) }
-    var showStartDate by remember { mutableStateOf(false) }
+    var showStartDate by remember { mutableStateOf(false) }   // back to a real date picker
 
     fun timeLabel(dt: LocalDateTime) =
         dt.format(DateTimeFormatter.ofPattern("EEE, MMM d h:mm a"))
@@ -89,10 +93,11 @@ fun StartRunDialog(
     val formValid = capValid && timeValid && nameValid
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!submitting) onDismiss() },
+
         confirmButton = {
             TextButton(
-                enabled = formValid,
+                enabled = formValid && !submitting,
                 onClick = {
                     val zone = ZoneId.systemDefault()
                     val run = Run(
@@ -104,22 +109,35 @@ fun StartRunDialog(
                         mode       = mode,
                         maxPlayers = capInt(),
                         playerIds  = emptyList(),
-                        name       = normalizeRunName(nameText)    // <-- NEW
+                        name       = normalizeRunName(nameText)
                     )
+                    submitting = true
                     onCreate(run)
                 }
-            ) { Text("Create") }
+            ) {
+                if (submitting) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                        Text("Creating…")
+                    }
+                } else {
+                    Text("Create")
+                }
+            }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-        title = { Text("Start a run") },
+
+        dismissButton = {
+            TextButton(enabled = !submitting, onClick = onDismiss) { Text("Cancel") }
+        },
+
+        title = { Text("Create run") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
 
-                // --- Run Name input with counter & validation ---
+                // Run Name
                 OutlinedTextField(
                     value = nameText,
                     onValueChange = { input ->
-                        // Enforce character whitelist & length progressively as user types
                         val filtered = input.filter { ch ->
                             ch.isLetterOrDigit() || ch.isWhitespace() || "'’-_ .!?:()".contains(ch)
                         }.take(nameMax)
@@ -138,10 +156,14 @@ fun StartRunDialog(
                             else -> Text("$remaining left")
                         }
                     },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Words,
+                        imeAction = ImeAction.Next
+                    )
                 )
 
-                // Mode dropdown … (unchanged)
+                // Mode dropdown
                 var expanded by remember { mutableStateOf(false) }
                 ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
                     OutlinedTextField(
@@ -159,7 +181,7 @@ fun StartRunDialog(
                     }
                 }
 
-                // Capacity … (unchanged)
+                // Capacity
                 OutlinedTextField(
                     value = capacityText,
                     onValueChange = {
@@ -172,17 +194,29 @@ fun StartRunDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // Date/Time pickers … (unchanged)
-                OutlinedButton(onClick = { showStartDate = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Start Date: ${startAt.toLocalDate()}")
-                }
-                OutlinedButton(onClick = { showStart = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Start Time: ${timeLabel(startAt)}")
-                }
-                OutlinedButton(onClick = { showEnd = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text("End Time: ${timeLabel(endAt)}")
-                }
+                // Date/Time pickers — keep pill style, original behavior
+                FilledTonalButton(
+                    onClick = { showStartDate = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.large,
+                    contentPadding = PaddingValues(vertical = 14.dp)
+                ) { Text("Start Date: ${startAt.toLocalDate()}") }
 
+                FilledTonalButton(
+                    onClick = { showStart = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.large,
+                    contentPadding = PaddingValues(vertical = 14.dp)
+                ) { Text("Start Time: ${timeLabel(startAt)}") }
+
+                FilledTonalButton(
+                    onClick = { showEnd = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.large,
+                    contentPadding = PaddingValues(vertical = 14.dp)
+                ) { Text("End Time: ${timeLabel(endAt)}") }
+
+                // Time validation
                 if (!timeValid) {
                     val msg = when {
                         startAt.isBefore(minStart) -> "Start time must be at least 10 minutes from now."
@@ -194,7 +228,7 @@ fun StartRunDialog(
                     Text(msg, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
 
-                // --- NEW: inline server-side error (capacity/limits/etc.) ---
+                // Inline server-side error
                 if (!errorMessage.isNullOrBlank()) {
                     Text(
                         text = errorMessage,
@@ -206,6 +240,7 @@ fun StartRunDialog(
         }
     )
 
+    // --- Time dialogs (unchanged behavior) ---
     if (showStart) TimePickerDialog(
         initial = startAt,
         onDismiss = { showStart = false },
@@ -224,45 +259,32 @@ fun StartRunDialog(
         initial = endAt,
         onDismiss = { showEnd = false },
         onConfirm = { picked ->
-            // Build candidate on the start date with picked time
             val t = picked.toLocalTime()
             var fixed = startAt.withHour(t.hour).withMinute(t.minute).withSecond(0).withNano(0)
-
-            // If time is earlier than the start time, move to next day
             if (fixed.isBefore(startAt)) fixed = fixed.plusDays(1)
-
-            // Enforce 15 min minimum and 24h maximum window
             if (!fixed.isAfter(startAt.plusMinutes(15))) fixed = startAt.plusMinutes(15)
             if (fixed.isAfter(startAt.plusHours(24))) fixed = startAt.plusHours(24)
-
             endAt = fixed
             showEnd = false
         }
     )
+
+    // Original start-date picker (full date, not month-only)
     if (showStartDate) StartDatePickerDialog(
         initial = startAt,
         minDate = earliestDate,
         maxDate = latestDate,
         onDismiss = { showStartDate = false },
         onConfirm = { picked ->
-            // Apply time-based bounds to the picked start
             val fixedStart = when {
                 picked.isBefore(minStart) -> minStart
                 picked.isAfter(maxStart)  -> maxStart
                 else -> picked
             }
-
-            // Rebuild end using the SAME time-of-day as before, on the new start date
+            // keep end’s time-of-day; rebuild on new date and clamp within [15m, 24h]
             val endT = endAt.toLocalTime()
-            var newEnd = fixedStart.withHour(endT.hour)
-                .withMinute(endT.minute)
-                .withSecond(0)
-                .withNano(0)
-
-            // If end is not after start on that date, roll to next day
+            var newEnd = fixedStart.withHour(endT.hour).withMinute(endT.minute).withSecond(0).withNano(0)
             if (!newEnd.isAfter(fixedStart)) newEnd = newEnd.plusDays(1)
-
-            // Clamp to [start + 15 min, start + 24h]
             if (newEnd.isBefore(fixedStart.plusMinutes(15))) newEnd = fixedStart.plusMinutes(15)
             if (newEnd.isAfter(fixedStart.plusHours(24)))   newEnd = fixedStart.plusHours(24)
 
@@ -303,10 +325,10 @@ fun TimePickerDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StartDatePickerDialog(
+private fun StartDatePickerDialog(
     initial: LocalDateTime,
-    minDate: java.time.LocalDate,   // today
-    maxDate: java.time.LocalDate,   // today + 1y
+    minDate: LocalDate,
+    maxDate: LocalDate,
     onDismiss: () -> Unit,
     onConfirm: (LocalDateTime) -> Unit
 ) {
@@ -318,26 +340,22 @@ fun StartDatePickerDialog(
         yearRange = IntRange(minDate.year, maxDate.year)
     )
 
-    // Material3 DatePickerDialog (not generic AlertDialog)
     androidx.compose.material3.DatePickerDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
             TextButton(onClick = {
                 val millis = state.selectedDateMillis
                 if (millis != null) {
-                    // interpret selection at UTC midnight to avoid TZ back-shift
                     val pickedUtcDate = java.time.Instant.ofEpochMilli(millis)
                         .atZone(java.time.ZoneOffset.UTC)
                         .toLocalDate()
 
-                    // clamp date to [minDate, maxDate]
                     val clamped = when {
                         pickedUtcDate.isBefore(minDate) -> minDate
                         pickedUtcDate.isAfter(maxDate)  -> maxDate
                         else -> pickedUtcDate
                     }
 
-                    // keep existing time-of-day; swap only the date
                     val fixed = initial.withYear(clamped.year)
                         .withMonth(clamped.monthValue)
                         .withDayOfMonth(clamped.dayOfMonth)
@@ -354,3 +372,4 @@ fun StartDatePickerDialog(
         DatePicker(state = state, showModeToggle = true)
     }
 }
+

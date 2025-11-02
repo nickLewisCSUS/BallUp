@@ -3,7 +3,9 @@ package com.nicklewis.ballup.ui.courts.components
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nicklewis.ballup.util.RowRun
 import java.time.ZoneId
@@ -30,35 +32,90 @@ fun RunRow(
 
     val open = (rr.maxPlayers - rr.playerCount).coerceAtLeast(0)
     val status = when {
-        open > 0 -> "Open • $open left"
+        open > 0 -> "Open"
         rr.playerCount >= rr.maxPlayers -> "Full"
         else -> "Active"
     }
+    val isJoined = currentUid != null && (rr.playerIds?.contains(currentUid) == true)
 
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(10.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+
+            // Header: run name (single line) + status pill
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
-                    rr.name?.ifBlank { "Pickup run" } ?: "Pickup run",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary
+                    text = rr.name?.ifBlank { "Pickup run" } ?: "Pickup run",
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
-                AssistChip(onClick = {}, label = { Text(status) })
-                Spacer(Modifier.weight(1f))
-                if (timeLabel.isNotBlank()) {
-                    Text(timeLabel, style = MaterialTheme.typography.bodySmall)
-                }
+                Spacer(Modifier.width(8.dp))
+                StatusPill(text = status, filled = status == "Full")
             }
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onView) { Text("View run") }
-                val alreadyIn = currentUid != null && (rr.playerIds?.contains(currentUid) == true)
-                if (alreadyIn) {
-                    OutlinedButton(onClick = onLeave) { Text("Leave") }
+
+            // Subline: time + players
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = buildString {
+                    if (timeLabel.isNotBlank()) append(timeLabel)
+                    if (rr.maxPlayers > 0) {
+                        val count = rr.playerCount
+                        if (isNotEmpty()) append("  •  ")
+                        append("$count/${rr.maxPlayers}")
+                    }
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(Modifier.height(6.dp))
+
+            // Footer: View (left) + Join/Leave (right)
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(onClick = onView) { Text("View") }
+
+                if (isJoined) {
+                    OutlinedButton(
+                        onClick = onLeave,
+                        shape = MaterialTheme.shapes.medium,
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                        modifier = Modifier.defaultMinSize(minWidth = 0.dp)
+                    ) { Text("Leave", style = MaterialTheme.typography.labelLarge) }
                 } else {
-                    OutlinedButton(onClick = onJoin) { Text("Join") }
+                    FilledTonalButton(
+                        onClick = onJoin,
+                        shape = MaterialTheme.shapes.medium,
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                        modifier = Modifier.defaultMinSize(minWidth = 0.dp)
+                    ) { Text("Join", style = MaterialTheme.typography.labelLarge) }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun StatusPill(text: String, filled: Boolean) {
+    val container = if (filled) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
+    val content = MaterialTheme.colorScheme.onSurfaceVariant
+    Surface(
+        color = container,
+        shape = MaterialTheme.shapes.small,
+        tonalElevation = if (filled) 2.dp else 0.dp
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = content,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+        )
     }
 }

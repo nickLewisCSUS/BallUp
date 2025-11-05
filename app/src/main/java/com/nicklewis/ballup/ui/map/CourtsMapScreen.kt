@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
@@ -72,7 +73,8 @@ fun CourtsMapScreen(
     showIndoor: Boolean,
     showOutdoor: Boolean,
     onToggleIndoor: () -> Unit,
-    onToggleOutdoor: () -> Unit
+    onToggleOutdoor: () -> Unit,
+    onOpenRunDetails: (runId: String) -> Unit
 ) {
     val db = remember { FirebaseFirestore.getInstance() }
     var courts by remember { mutableStateOf(listOf<Pair<String, Court>>()) }
@@ -376,85 +378,29 @@ fun CourtsMapScreen(
                             enabled = lat != null && lng != null,
                             onClick = {
                                 if (lat != null && lng != null) {
-                                    openDirections(context, lat, lng, court.name)  // <-- use captured context
-                                    // or openDirections(ctx, lat, lng, court.name) if using rememberUpdatedState
+                                    openDirections(context, lat, lng, court.name)
                                 }
                             }
                         ) { Text("Directions") }
                     }
 
-                    val isHost = uid != null && currentRun.hostId == uid
-                    if (isHost && currentRun.status == "active" && runId != null && uid != null) {
-                        Divider()
-                        Text("Host controls", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(12.dp))
 
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf("3v3", "4v4", "5v5").forEach { m ->
-                                FilterChip(
-                                    selected = currentRun.mode == m,
-                                    onClick = {
-                                        scope.launch {
-                                            try { updateMode(db, runId, uid, m) }
-                                            catch (e: Exception) { Log.e("RUN", "mode", e) }
-                                        }
-                                    },
-                                    label = { Text(m) }
-                                )
-                            }
-                        }
-
-                        Spacer(Modifier.height(8.dp))
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text("Capacity: ${currentRun.playerCount}/${currentRun.maxPlayers}")
-                            OutlinedButton(
-                                enabled = currentRun.maxPlayers - 2 >= currentRun.playerCount,
-                                onClick = {
-                                    scope.launch {
-                                        try {
-                                            updateMaxPlayers(
-                                                db, runId, uid,
-                                                (currentRun.maxPlayers - 2).coerceAtLeast(currentRun.playerCount)
-                                            )
-                                        } catch (e: Exception) { Log.e("RUN", "cap-", e) }
-                                    }
-                                }
-                            ) { Text("-2") }
-
-                            OutlinedButton(
-                                onClick = {
-                                    scope.launch {
-                                        try { updateMaxPlayers(db, runId, uid, currentRun.maxPlayers + 2) }
-                                        catch (e: Exception) { Log.e("RUN", "cap+", e) }
-                                    }
-                                }
-                            ) { Text("+2") }
-                        }
-
-                        Spacer(Modifier.height(8.dp))
-
-                        Button(
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer
-                            ),
-                            onClick = {
-                                scope.launch {
-                                    try { endRun(db, runId, uid) }
-                                    catch (e: Exception) { Log.e("RUN", "end", e) }
-                                }
-                            }
-                        ) { Text("End run") }
+                    // NEW: same RunDetails experience as from CourtList
+                    Button(
+                        onClick = { if (runId != null) onOpenRunDetails(runId) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("View run details")
                     }
+
+                    Spacer(Modifier.height(8.dp))
                 }
 
                 Spacer(Modifier.height(8.dp))
             }
         }
     }
-
     error?.let {
         Text(
             "Map error: $it",
@@ -463,7 +409,6 @@ fun CourtsMapScreen(
         )
     }
 }
-
 @Composable
 private fun rememberMapViewWithLifecycle(): MapView {
     val context = LocalContext.current

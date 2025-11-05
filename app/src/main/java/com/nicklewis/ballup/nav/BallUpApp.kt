@@ -109,7 +109,10 @@ fun BallUpApp() {
                         showIndoor = showIndoor,
                         showOutdoor = showOutdoor,
                         onToggleIndoor = { showIndoor = !showIndoor },
-                        onToggleOutdoor = { showOutdoor = !showOutdoor }
+                        onToggleOutdoor = { showOutdoor = !showOutdoor },
+                        onOpenRunDetails = { runId ->
+                            nav.navigate("run/$runId")
+                        }
                     )
                 }
                 composable(Screen.List.route) { CourtsListScreen() }

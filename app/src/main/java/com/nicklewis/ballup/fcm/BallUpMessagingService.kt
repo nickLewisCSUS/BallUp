@@ -104,6 +104,52 @@ class BallUpMessagingService : FirebaseMessagingService() {
         val runId = data["runId"] ?: ""
         val slotsLeft = data["slotsLeft"] ?: ""
 
+        // --- Upcoming run reminder (1h / 10m before) ---
+        if (type == "run_upcoming" && runId.isNotEmpty()) {
+            val minutes = data["minutes"]?.toIntOrNull()
+            val runName = data["runName"] ?: data["name"] ?: ""
+
+            val whenText = when (minutes) {
+                60 -> "in 1 hour"
+                10 -> "in 10 minutes"
+                else -> "soon"
+            }
+
+            val titleNotif = if (runName.isNotEmpty()) {
+                runName
+            } else {
+                "Your run is coming up"
+            }
+
+            val text = buildString {
+                append("Starts ")
+                append(whenText)
+                if (courtName.isNotEmpty()) {
+                    append(" at ")
+                    append(courtName)
+                }
+            }
+
+            // In-app banner
+            NotifBus.emit(
+                InAppAlert.RunUpcoming(
+                    title = titleNotif,
+                    courtName = courtName,
+                    runId = runId,
+                    minutes = minutes ?: 0
+                )
+            )
+
+            // System notification
+            postSystemNotificationIfAllowed(
+                channelId = "runs",
+                title = titleNotif,
+                text = text,
+                deeplinkRunId = runId
+            )
+            return
+        }
+
         if (type == "run_spots" && runId.isNotEmpty()) {
             val title = if (slotsLeft == "1") "A spot opened" else "$slotsLeft spots left"
             val text  = if (courtName.isNotEmpty()) courtName else "Tap to view"

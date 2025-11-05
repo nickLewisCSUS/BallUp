@@ -3,6 +3,7 @@ import { setGlobalOptions } from "firebase-functions/v2/options";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { onDocumentCreated, onDocumentUpdated } from "firebase-functions/v2/firestore";
 import { logger } from "firebase-functions";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 
 admin.initializeApp();
 setGlobalOptions({ region: "us-central1", maxInstances: 1 });
@@ -223,4 +224,115 @@ export const notifyRunSpotsChange = onDocumentUpdated("runs/{runId}", async (eve
     lastAlertAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 });
+
+
+/** ---------- scheduled: notify players before a run starts ---------- */
+
+async function notifyUpcomingWindow(
+  windowStartMs: number,
+  windowEndMs: number,
+  leadMinutes: number,
+  flagField: string
+) {
+  const db = admin.firestore();
+
+  const startTs = admin.firestore.Timestamp.fromMillis(windowStartMs);
+  const endTs   = admin.firestore.Timestamp.fromMillis(windowEndMs);
+
+  const snap = await db
+    .collection("runs")
+    .where("status", "==", "active")
+    .where("startsAt", ">=", startTs)
+    .where("startsAt", "<", endTs)
+    .get();
+
+  if (snap.empty) return;
+
+  for (const doc of snap.docs) {
+    const run = doc.data() as any;
+
+    // already notified for this window?
+    if (run[flagField]) continue;
+
+    const runId      = (run.runId as string) || doc.id;
+    const courtId    = String(run.courtId ?? "");
+    const runName    = String(run.name ?? "");
+    const mode       = String(run.mode ?? "5v5");
+    const maxPlayers = Number(run.maxPlayers ?? 10);
+    const startsAtMs = tsMillis(run.startsAt) ?? Date.now();
+
+    const playerIds: string[] = Array.isArray(run.playerIds) ? run.playerIds : [];
+    if (!playerIds.length || !courtId) continue;
+
+    const courtName =
+      (await getCourtName(courtId)) ??
+      (run.courtName as string | undefined) ??
+      "your court";
+
+    // collect all device tokens for these players
+    const tokens = new Set<string>();
+    for (const uid of playerIds) {
+      const toks = await db
+        .collection("users")
+        .doc(uid)
+        .collection("tokens")
+        .get();
+      toks.docs.forEach((d) => tokens.add(d.id));
+    }
+    if (!tokens.size) continue;
+
+    const dataPayload: { [k: string]: string } = {
+      type: "run_upcoming",
+      runId,
+      courtId,
+      courtName,
+      runName,
+      mode,
+      maxPlayers: String(maxPlayers),
+      startsAt: String(startsAtMs),
+      minutes: String(leadMinutes),
+    };
+
+    // send to each device token
+    await Promise.all(
+      Array.from(tokens).map((token) =>
+        admin.messaging().send({
+          token,
+          data: dataPayload,
+          android: {
+            priority: "high",
+            notification: { channelId: "runs" },
+          },
+        })
+      )
+    );
+
+    // mark that we sent this window's notification
+    await doc.ref.update({ [flagField]: true });
+  }
+}
+
+export const notifyUpcomingRuns = onSchedule("every 5 minutes", async () => {
+  const now = Date.now();
+  const minute = 60 * 1000;
+
+  // 1 hour window: now + 55..65 minutes
+  await notifyUpcomingWindow(
+    now + 55 * minute,
+    now + 65 * minute,
+    60,
+    "upcoming1hNotified"
+  );
+
+  // 10 minute window: now + 5..15 minutes
+  await notifyUpcomingWindow(
+    now + 5 * minute,
+    now + 15 * minute,
+    10,
+    "upcoming10mNotified"
+  );
+});
+
+
+
 

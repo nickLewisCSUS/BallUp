@@ -23,4 +23,11 @@ sealed class InAppAlert {
         val runId: String,
         val timeText: String
     ) : InAppAlert()
+
+    data class RunUpcoming(
+        val title: String,
+        val courtName: String,
+        val runId: String,
+        val minutes: Int
+    ) : InAppAlert()
 }

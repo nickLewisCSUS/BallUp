@@ -13,7 +13,10 @@ fun FilterBar(
     onToggleIndoor: () -> Unit,
     onToggleOutdoor: () -> Unit,
     onSortChange: (SortMode) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // NEW: starred filter
+    showStarredOnly: Boolean = false,
+    onToggleStarredOnly: () -> Unit = {}
 ) {
     FilterMenu(
         showIndoor = showIndoor,
@@ -22,6 +25,8 @@ fun FilterBar(
         onToggleIndoor = onToggleIndoor,
         onToggleOutdoor = onToggleOutdoor,
         onSortChange = onSortChange,
-        modifier = modifier
+        modifier = modifier,
+        showStarredOnly = showStarredOnly,
+        onToggleStarredOnly = onToggleStarredOnly
     )
 }

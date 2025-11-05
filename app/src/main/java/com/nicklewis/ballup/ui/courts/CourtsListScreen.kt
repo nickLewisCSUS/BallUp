@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -56,8 +57,12 @@ fun CourtsListScreen(
 
     // holds the courtId when the dialog is open
     var showCreate by remember { mutableStateOf<String?>(null) }
-    // NEW: holds inline error for the dialog
+    // holds inline error for the dialog
     var dialogError by remember { mutableStateOf<String?>(null) }
+
+    // NEW: starred filter state + starred court IDs
+    var showStarredOnly by rememberSaveable { mutableStateOf(false) }
+    val starredIds by starsVm.starred.collectAsState()
 
     LaunchedEffect(Unit) {
         if (hasLocationPermission(ctx)) {
@@ -76,6 +81,15 @@ fun CourtsListScreen(
     val scope = rememberCoroutineScope()
     val db = remember { FirebaseFirestore.getInstance() }
 
+    // Apply the "Starred" filter on top of vm.rows
+    val visibleRows = remember(vm.rows, showStarredOnly, starredIds) {
+        if (!showStarredOnly) {
+            vm.rows
+        } else {
+            vm.rows.filter { row -> row.courtId in starredIds }
+        }
+    }
+
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         SearchBarWithSuggestions(
             query = vm.query,
@@ -93,21 +107,44 @@ fun CourtsListScreen(
             showIndoor = vm.showIndoor,
             showOutdoor = vm.showOutdoor,
             sortMode = vm.sortMode,
-            onToggleIndoor = { vm.showIndoor = !vm.showIndoor },
-            onToggleOutdoor = { vm.showOutdoor = !vm.showOutdoor },
+            onToggleIndoor = {
+                val newIndoor = !vm.showIndoor
+                // Only update if at least one surface will remain true
+                if (newIndoor || vm.showOutdoor) {
+                    vm.showIndoor = newIndoor
+                }
+            },
+            onToggleOutdoor = {
+                val newOutdoor = !vm.showOutdoor
+                if (newOutdoor || vm.showIndoor) {
+                    vm.showOutdoor = newOutdoor
+                }
+            },
             onSortChange = { vm.sortMode = it },
-            modifier = Modifier.padding(bottom = 12.dp)
+            modifier = Modifier.padding(bottom = 12.dp),
+            showStarredOnly = showStarredOnly,
+            onToggleStarredOnly = { showStarredOnly = !showStarredOnly }
         )
 
-        vm.error?.let { Text("Error: $it", color = MaterialTheme.colorScheme.error) }
-        if (vm.courts.isEmpty()) Text("No courts yet. Add one in Firestore to see it here.")
-        if (vm.rows.isEmpty()) Text("No courts match your filter.")
-        else {
+        vm.error?.let {
+            Text(
+                "Error: $it",
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+
+        if (vm.courts.isEmpty()) {
+            Text("No courts yet. Add one in Firestore to see it here.")
+        }
+
+        if (visibleRows.isEmpty() && vm.courts.isNotEmpty()) {
+            Text("No courts match your filter.")
+        } else if (visibleRows.isNotEmpty()) {
             LazyColumn(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(vm.rows, key = { it.courtId }) { row ->
+                items(visibleRows, key = { it.courtId }) { row ->
                     CourtCard(
                         row = row,
                         uid = uid,
@@ -117,16 +154,35 @@ fun CourtsListScreen(
                             showCreate = courtId
                         },
                         onJoinRun = { runId ->
-                            if (uid == null) { Log.e("Runs","joinRun: not signed in"); return@CourtCard }
-                            scope.launch { try { joinRun(db, runId, uid) } catch (e: Exception) { Log.e("Runs","joinRun failed", e) } }
+                            if (uid == null) {
+                                Log.e("Runs", "joinRun: not signed in")
+                                return@CourtCard
+                            }
+                            scope.launch {
+                                try {
+                                    joinRun(db, runId, uid)
+                                } catch (e: Exception) {
+                                    Log.e("Runs", "joinRun failed", e)
+                                }
+                            }
                         },
                         onLeaveRun = { runId ->
-                            if (uid == null) { Log.e("Runs","leaveRun: not signed in"); return@CourtCard }
-                            scope.launch { try { leaveRun(db, runId, uid) } catch (e: Exception) { Log.e("Runs","leaveRun failed", e) } }
+                            if (uid == null) {
+                                Log.e("Runs", "leaveRun: not signed in")
+                                return@CourtCard
+                            }
+                            scope.launch {
+                                try {
+                                    leaveRun(db, runId, uid)
+                                } catch (e: Exception) {
+                                    Log.e("Runs", "leaveRun failed", e)
+                                }
+                            }
                         },
                         onViewRun = { runId ->
                             AppNavControllerHolder.navController?.navigate("run/$runId") {
-                                launchSingleTop = true; restoreState = true
+                                launchSingleTop = true
+                                restoreState = true
                             }
                         },
                         starsVm = starsVm,
@@ -167,14 +223,20 @@ fun CourtsListScreen(
 private fun humanizeCreateRunError(t: Throwable): String {
     val msg = t.message ?: ""
     return when {
-        "all surfaces are in use" in msg -> "This court is full at that time — all surfaces are in use."
-        "Daily host limit" in msg        -> "Daily host limit reached for this court."
+        "all surfaces are in use" in msg ->
+            "This court is full at that time — all surfaces are in use."
+        "Daily host limit" in msg ->
+            "Daily host limit reached for this court."
         "maximum number of upcoming runs" in msg ->
             "You already have the maximum number of upcoming runs scheduled."
-        "Not signed in" in msg           -> "You must be signed in to create a run."
-        "Missing courtId" in msg         -> "Couldn’t create run: court is missing."
-        "Missing start" in msg           -> "Please pick a start time."
-        "Missing end" in msg             -> "Please pick an end time."
+        "Not signed in" in msg ->
+            "You must be signed in to create a run."
+        "Missing courtId" in msg ->
+            "Couldn’t create run: court is missing."
+        "Missing start" in msg ->
+            "Please pick a start time."
+        "Missing end" in msg ->
+            "Please pick an end time."
 
         // Firestore index / permission style errors (optional catch-all):
         msg.contains("FAILED_PRECONDITION", ignoreCase = true) &&

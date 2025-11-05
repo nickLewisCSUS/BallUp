@@ -18,7 +18,10 @@ fun FilterMenu(
     onToggleIndoor: () -> Unit,
     onToggleOutdoor: () -> Unit,
     onSortChange: (SortMode) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // NEW: starred filter support
+    showStarredOnly: Boolean = false,
+    onToggleStarredOnly: () -> Unit = {}
 ) {
     var expanded by remember { mutableStateOf(false) }
 
@@ -41,12 +44,34 @@ fun FilterMenu(
             DropdownMenuItem(
                 text = { Text("Indoor courts") },
                 onClick = { onToggleIndoor() },
-                leadingIcon = { Checkbox(checked = showIndoor, onCheckedChange = null) }
+                leadingIcon = {
+                    Checkbox(
+                        checked = showIndoor,
+                        onCheckedChange = null
+                    )
+                }
             )
             DropdownMenuItem(
                 text = { Text("Outdoor courts") },
                 onClick = { onToggleOutdoor() },
-                leadingIcon = { Checkbox(checked = showOutdoor, onCheckedChange = null) }
+                leadingIcon = {
+                    Checkbox(
+                        checked = showOutdoor,
+                        onCheckedChange = null
+                    )
+                }
+            )
+
+            // NEW: Starred courts only
+            DropdownMenuItem(
+                text = { Text("Starred courts only") },
+                onClick = { onToggleStarredOnly() },
+                leadingIcon = {
+                    Checkbox(
+                        checked = showStarredOnly,
+                        onCheckedChange = null
+                    )
+                }
             )
 
             Divider(modifier = Modifier.padding(vertical = 4.dp))
@@ -55,17 +80,32 @@ fun FilterMenu(
             DropdownMenuItem(
                 text = { Text("Sort: Closest") },
                 onClick = { onSortChange(SortMode.CLOSEST); expanded = false },
-                trailingIcon = { RadioButton(selected = sortMode == SortMode.CLOSEST, onClick = null) }
+                trailingIcon = {
+                    RadioButton(
+                        selected = sortMode == SortMode.CLOSEST,
+                        onClick = null
+                    )
+                }
             )
             DropdownMenuItem(
                 text = { Text("Sort: Most players") },
                 onClick = { onSortChange(SortMode.MOST_PLAYERS); expanded = false },
-                trailingIcon = { RadioButton(selected = sortMode == SortMode.MOST_PLAYERS, onClick = null) }
+                trailingIcon = {
+                    RadioButton(
+                        selected = sortMode == SortMode.MOST_PLAYERS,
+                        onClick = null
+                    )
+                }
             )
             DropdownMenuItem(
                 text = { Text("Sort: Newest") },
                 onClick = { onSortChange(SortMode.NEWEST); expanded = false },
-                trailingIcon = { RadioButton(selected = sortMode == SortMode.NEWEST, onClick = null) }
+                trailingIcon = {
+                    RadioButton(
+                        selected = sortMode == SortMode.NEWEST,
+                        onClick = null
+                    )
+                }
             )
         }
     }

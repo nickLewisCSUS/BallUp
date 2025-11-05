@@ -12,7 +12,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
-import kotlinx.coroutines.flow.collect
 
 @Composable
 fun InAppAlertsOverlay(nav: NavHostController) {
@@ -43,6 +42,29 @@ fun InAppAlertsOverlay(nav: NavHostController) {
                 is InAppAlert.RunCreated -> {
                     val res = snack.showSnackbar(
                         message = "${evt.title} · ${evt.courtName} • starts ${evt.timeText}",
+                        actionLabel = "View",
+                        withDismissAction = true,
+                        duration = SnackbarDuration.Short
+                    )
+                    if (res == SnackbarResult.ActionPerformed) {
+                        nav.navigate("run/${evt.runId}") {
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                }
+
+                // 👇 Add this new branch right here
+                is InAppAlert.RunUpcoming -> {
+                    val mins = evt.minutes
+                    val timeText = when (mins) {
+                        60 -> "in 1 hour"
+                        10 -> "in 10 minutes"
+                        else -> "soon"
+                    }
+
+                    val res = snack.showSnackbar(
+                        message = "${evt.title} · starts $timeText at ${evt.courtName}",
                         actionLabel = "View",
                         withDismissAction = true,
                         duration = SnackbarDuration.Short

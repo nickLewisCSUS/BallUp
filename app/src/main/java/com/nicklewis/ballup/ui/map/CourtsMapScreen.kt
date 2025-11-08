@@ -20,8 +20,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
@@ -60,14 +58,15 @@ import com.nicklewis.ballup.util.hasLocationPermission
 import com.nicklewis.ballup.util.openDirections
 import com.nicklewis.ballup.firebase.joinRun
 import com.nicklewis.ballup.firebase.leaveRun
-import com.nicklewis.ballup.firebase.updateMaxPlayers
-import com.nicklewis.ballup.firebase.updateMode
-import com.nicklewis.ballup.firebase.endRun
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.LocationSearching
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import java.time.LocalDate
+import java.time.ZoneId
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 @Composable
 fun CourtsMapScreen(
     showIndoor: Boolean,
@@ -284,15 +283,35 @@ fun CourtsMapScreen(
         val uid = FirebaseAuth.getInstance().currentUser?.uid
         val scope = rememberCoroutineScope()
 
-        val currentRunPair = runs.firstOrNull { it.second.courtId == courtId && it.second.status == "active" }
-        val runId = currentRunPair?.first
-        val currentRun = currentRunPair?.second
+        val today = LocalDate.now()
+
+        val courtRuns = runs.filter { (_, run) ->
+            // must belong to this court and be active
+            if (run.courtId != courtId || run.status != "active") return@filter false
+
+            // only runs whose startTime is "today"
+            val ts = run.startTime  // <-- if your model uses `startsAt`, change this
+            if (ts == null) return@filter false
+
+            val runDate = ts.toDate().toInstant()
+                .atZone(ZoneId.systemDefault())
+                .toLocalDate()
+
+            runDate == today
+        }
 
         ModalBottomSheet(
             onDismissRequest = { selected = null },
             dragHandle = { BottomSheetDefaults.DragHandle() }
         ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Court header
                 Text(court.name.orEmpty(), style = MaterialTheme.typography.titleLarge)
                 Text(court.address.orEmpty(), style = MaterialTheme.typography.bodyMedium)
                 Text(
@@ -304,7 +323,8 @@ fun CourtsMapScreen(
                     style = MaterialTheme.typography.bodySmall
                 )
 
-                if (currentRun == null) {
+                if (courtRuns.isEmpty()) {
+                    // --- No runs yet at this court ---
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Button(onClick = {
                             val hostId = uid ?: "uid_dev"
@@ -323,54 +343,6 @@ fun CourtsMapScreen(
                                 .addOnSuccessListener { selected = null }
                         }) { Text("Start run here") }
 
-                        val lat = court.geo?.lat; val lng = court.geo?.lng
-                        val context = LocalContext.current  // <-- read in composable scope
-
-                        OutlinedButton(
-                            enabled = lat != null && lng != null,
-                            onClick = {
-                                if (lat != null && lng != null) {
-                                    openDirections(context, lat, lng, court.name)
-                                }
-                            }
-                        ) { Text("Directions") }
-                    }
-                } else {
-                    Text(
-                        "Pickup running: ${currentRun.playerCount}/${currentRun.maxPlayers}",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-
-                    AttendeeChips(
-                        currentRun = currentRun,
-                        isHost = (uid != null && currentRun.hostId == uid),
-                        runId = runId,
-                        uid = uid
-                    )
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        val alreadyIn = uid != null && (currentRun.playerIds?.contains(uid) == true)
-
-                        if (!alreadyIn) {
-                            Button(onClick = {
-                                if (uid != null && runId != null) {
-                                    scope.launch {
-                                        try { joinRun(db, runId, uid) }
-                                        catch (e: Exception) { Log.e("JOIN", "Failed", e) }
-                                    }
-                                }
-                            }) { Text("Join") }
-                        } else {
-                            OutlinedButton(onClick = {
-                                if (uid != null && runId != null) {
-                                    scope.launch {
-                                        try { leaveRun(db, runId, uid) }
-                                        catch (e: Exception) { Log.e("LEAVE", "Failed", e) }
-                                    }
-                                }
-                            }) { Text("Leave") }
-                        }
-
                         val lat = court.geo?.lat
                         val lng = court.geo?.lng
 
@@ -383,18 +355,110 @@ fun CourtsMapScreen(
                             }
                         ) { Text("Directions") }
                     }
+                } else {
+                    // --- At least one run: show all runs for this court (like CourtsList does) ---
+                    Text(
+                        text = "Pickup running: ${courtRuns.size} run" +
+                                if (courtRuns.size == 1) "" else "s",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
 
-                    Spacer(Modifier.height(12.dp))
+                    courtRuns.forEach { (runId, currentRun) ->
+                        Spacer(Modifier.height(8.dp))
 
-                    // NEW: same RunDetails experience as from CourtList
-                    Button(
-                        onClick = { if (runId != null) onOpenRunDetails(runId) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("View run details")
+                        // A small "run card" inside the sheet
+                        Surface(
+                            tonalElevation = 2.dp,
+                            shape = MaterialTheme.shapes.medium,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = currentRun.mode?.let { "Pickup • $it" } ?: "Pickup run",
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    text = "Players: ${currentRun.playerCount}/${currentRun.maxPlayers}",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+
+                                // Player chips (host, kick, etc.)
+                                AttendeeChips(
+                                    currentRun = currentRun,
+                                    isHost = (uid != null && currentRun.hostId == uid),
+                                    runId = runId,
+                                    uid = uid
+                                )
+
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    val alreadyIn = uid != null &&
+                                            (currentRun.playerIds?.contains(uid) == true)
+
+                                    if (!alreadyIn) {
+                                        Button(
+                                            onClick = {
+                                                if (uid != null) {
+                                                    scope.launch {
+                                                        try { joinRun(db, runId, uid) }
+                                                        catch (e: Exception) { Log.e("JOIN", "Failed", e) }
+                                                    }
+                                                }
+                                            },
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Text("Join")
+                                        }
+                                    } else {
+                                        OutlinedButton(
+                                            onClick = {
+                                                if (uid != null) {
+                                                    scope.launch {
+                                                        try { leaveRun(db, runId, uid) }
+                                                        catch (e: Exception) { Log.e("LEAVE", "Failed", e) }
+                                                    }
+                                                }
+                                            },
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Text("Leave")
+                                        }
+                                    }
+
+                                    // View full details / host edit sheet
+                                    OutlinedButton(
+                                        onClick = { onOpenRunDetails(runId) },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("View details")
+                                    }
+                                }
+                            }
+                        }
                     }
 
-                    Spacer(Modifier.height(8.dp))
+                    // One Directions button for the court
+                    Spacer(Modifier.height(12.dp))
+                    val lat = court.geo?.lat
+                    val lng = court.geo?.lng
+                    OutlinedButton(
+                        enabled = lat != null && lng != null,
+                        onClick = {
+                            if (lat != null && lng != null) {
+                                openDirections(context, lat, lng, court.name)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Directions")
+                    }
                 }
 
                 Spacer(Modifier.height(8.dp))

@@ -2,8 +2,8 @@ package com.nicklewis.ballup.ui.runs
 
 import android.util.Log
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
@@ -13,6 +13,7 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.google.firebase.auth.FirebaseAuth
@@ -22,13 +23,12 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.nicklewis.ballup.firebase.joinRun
 import com.nicklewis.ballup.firebase.leaveRun
+import com.nicklewis.ballup.util.openDirections
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import androidx.compose.ui.platform.LocalContext
-import com.nicklewis.ballup.util.openDirections
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,7 +40,6 @@ fun RunDetailsScreen(
     val uid = remember { FirebaseAuth.getInstance().currentUser?.uid }
     val scope = rememberCoroutineScope()
 
-    // ----- State -----
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -52,7 +51,7 @@ fun RunDetailsScreen(
     var isMember by remember { mutableStateOf(false) }
     var showEdit by remember { mutableStateOf(false) }
 
-    // ----- Listen to run doc -----
+    // ----- listen to run -----
     DisposableEffect(runId) {
         var reg: ListenerRegistration? = null
         reg = db.collection("runs").document(runId)
@@ -70,13 +69,13 @@ fun RunDetailsScreen(
                     return@addSnapshotListener
                 }
                 val data = snap.data ?: emptyMap<String, Any>()
-                val rd = RunDoc.from(data, snap.reference)
-                run = rd
+                run = RunDoc.from(data, snap.reference)
                 loading = false
             }
         onDispose { reg?.remove() }
     }
 
+    // ----- fetch court meta -----
     LaunchedEffect(run?.courtId) {
         val cid = run?.courtId ?: return@LaunchedEffect
         courtName = null
@@ -86,19 +85,17 @@ fun RunDetailsScreen(
         try {
             val doc = db.collection("courts").document(cid).get().await()
             val data = doc.data
-
             courtName = (data?.get("name") as? String) ?: cid
-
             val geo = data?.get("geo") as? Map<*, *>
             courtLat = (geo?.get("lat") as? Number)?.toDouble()
             courtLng = (geo?.get("lng") as? Number)?.toDouble()
         } catch (e: Exception) {
             Log.w("RunDetails", "court fetch failed", e)
-            courtName = run?.courtId // fallback
+            courtName = run?.courtId
         }
     }
 
-    // track membership from the run doc itself
+    // ----- membership -----
     LaunchedEffect(run, uid) {
         val r = run ?: return@LaunchedEffect
         val me = uid
@@ -134,109 +131,154 @@ fun RunDetailsScreen(
             )
         }
     ) { padding ->
+        val scrollState = rememberScrollState()
+
         Column(
             modifier = Modifier
                 .padding(padding)
-                .padding(16.dp)
                 .fillMaxSize()
+                .verticalScroll(scrollState)
+                .padding(horizontal = 16.dp)
+                .padding(top = 16.dp, bottom = 56.dp), // give room above bottom nav
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             when {
-                loading -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
-                    }
+                loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
                 }
-                error != null -> {
-                    Text(text = error!!, color = MaterialTheme.colorScheme.error)
-                }
-                run == null -> {
-                    Text("Run not found")
-                }
+
+                error != null -> Text(error!!, color = MaterialTheme.colorScheme.error)
+
+                run == null -> Text("Run not found")
+
                 else -> {
                     val r = run!!
                     val open = (r.maxPlayers - r.playerCount).coerceAtLeast(0)
-
-                    // --- Run name + time window ---
-                    Text(
-                        text = r.name?.ifBlank { "Pickup Run" } ?: "Pickup Run",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = formatWindow(r.startsAt, r.endsAt),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = courtName ?: r.courtId.orEmpty(),
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    AssistChipRow(r.status, r.mode, open)
-
-                    Spacer(Modifier.height(12.dp))
-
-                    // Capacity row
-                    Text(
-                        text = "Players: ${r.playerCount} / ${r.maxPlayers}",
-                        style = MaterialTheme.typography.bodyLarge
-                    )
-                    if (open > 0) {
-                        Text(
-                            text = "$open spot${if (open == 1) "" else "s"} left",
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    } else {
-                        Text(text = "Full", color = MaterialTheme.colorScheme.secondary)
-                    }
-
-                    Spacer(Modifier.height(16.dp))
-
-                    // Members list
-                    if (r.playerIds.isNotEmpty()) {
-                        Text("Players (${r.playerIds.size})", style = MaterialTheme.typography.titleMedium)
-                        Spacer(Modifier.height(8.dp))
-                        LazyColumn(
-                            modifier = Modifier.weight(1f, fill = false),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            items(r.playerIds) { uidItem ->
-                                Text("• $uidItem", style = MaterialTheme.typography.bodyMedium)
-                            }
-                        }
-                        Spacer(Modifier.height(16.dp))
-                    } else {
-                        Spacer(Modifier.height(4.dp))
-                    }
-
-                    // Join/Leave actions
-                    val joining = remember { mutableStateOf(false) }
-                    val leaving = remember { mutableStateOf(false) }
                     val ctx = LocalContext.current
 
+                    // Header card (like CourtList cards)
+                    Surface(
+                        tonalElevation = 2.dp,
+                        shape = MaterialTheme.shapes.medium,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = r.name?.ifBlank { "Pickup Run" } ?: "Pickup Run",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = formatWindow(r.startsAt, r.endsAt),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = courtName ?: r.courtId.orEmpty(),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = "Mode • ${r.mode ?: "Unknown"}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "Players • ${r.playerCount}/${r.maxPlayers}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (open > 0) {
+                                Text(
+                                    "$open spot${if (open == 1) "" else "s"} left",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            } else {
+                                Text(
+                                    "Full",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.secondary
+                                )
+                            }
+                        }
+                    }
+
+                    // Players list card (NO LazyColumn here)
+                    if (r.playerIds.isNotEmpty()) {
+                        Text("Players", style = MaterialTheme.typography.titleMedium)
+                        Surface(
+                            tonalElevation = 1.dp,
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                r.playerIds.forEach { pid ->
+                                    Text("• $pid", style = MaterialTheme.typography.bodyMedium)
+                                }
+                            }
+                        }
+                    }
+
+                    // Actions row
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
+                        val joining = remember { mutableStateOf(false) }
+                        val leaving = remember { mutableStateOf(false) }
+
                         if (!isMember) {
                             val canJoin = r.status == "active" && open > 0 && uid != null
                             Button(
-                                onClick = { /* same as before */ },
+                                onClick = {
+                                    if (!canJoin) return@Button
+                                    joining.value = true
+                                    scope.launch {
+                                        try {
+                                            joinRun(db, runId, uid!!)
+                                        } catch (e: Exception) {
+                                            Log.e("RunDetails", "joinRun failed", e)
+                                        } finally {
+                                            joining.value = false
+                                        }
+                                    }
+                                },
                                 enabled = canJoin && !joining.value,
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 44.dp)
                             ) {
-                                Text(if (joining.value) "Joining..." else "Join Run")
+                                Text(if (joining.value) "Joining…" else "Join Run")
                             }
                         } else {
-                            Button(
-                                onClick = { /* same as before */ },
+                            OutlinedButton(
+                                onClick = {
+                                    if (uid == null) return@OutlinedButton
+                                    leaving.value = true
+                                    scope.launch {
+                                        try {
+                                            leaveRun(db, runId, uid)
+                                        } catch (e: Exception) {
+                                            Log.e("RunDetails", "leaveRun failed", e)
+                                        } finally {
+                                            leaving.value = false
+                                        }
+                                    }
+                                },
                                 enabled = !leaving.value,
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 44.dp)
                             ) {
-                                Text(if (leaving.value) "Leaving..." else "Leave Run")
+                                Text(if (leaving.value) "Leaving…" else "Leave Run")
                             }
                         }
 
@@ -249,20 +291,22 @@ fun RunDetailsScreen(
                                     openDirections(ctx, lat, lng, name)
                                 }
                             },
-                            enabled = courtLat != null && courtLng != null
+                            enabled = courtLat != null && courtLng != null,
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 44.dp)
                         ) {
                             Text("Directions")
                         }
                     }
 
-                    // Tiny footer
-                    Spacer(Modifier.height(10.dp))
+                    Spacer(Modifier.height(8.dp))
                     Text(
                         text = "Host: ${r.hostId ?: r.hostUid ?: "unknown"}",
-                        style = MaterialTheme.typography.bodySmall
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    // Host edit sheet
                     if (showEdit) {
                         EditRunSheet(
                             run = r,
@@ -286,22 +330,8 @@ fun RunDetailsScreen(
     }
 }
 
-/* ---------- Helpers & simple model ---------- */
+/* ---------- Helpers & local model ---------- */
 
-@Composable
-private fun AssistChipRow(status: String?, mode: String?, open: Int) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (!mode.isNullOrBlank()) {
-            AssistChip(onClick = {}, label = { Text(mode) })
-        }
-        if (!status.isNullOrBlank()) {
-            AssistChip(onClick = {}, label = { Text(status) })
-        }
-        AssistChip(onClick = {}, label = { Text(if (open > 0) "$open open" else "Full") })
-    }
-}
-
-/** Minimal view model for the run document (tolerates missing fields). */
 private data class RunDoc(
     val ref: DocumentReference,
     val courtId: String?,
@@ -312,35 +342,36 @@ private data class RunDoc(
     val hostUid: String?,
     val hostId: String?,
     val playerIds: List<String>,
-    // NEW fields
     val name: String?,
     val startsAt: com.google.firebase.Timestamp?,
     val endsAt: com.google.firebase.Timestamp?
 ) {
     companion object {
         fun from(data: Map<String, Any>, ref: DocumentReference): RunDoc {
-            val courtId    = data["courtId"] as? String
-            val mode       = data["mode"] as? String
-            val status     = data["status"] as? String ?: "active"
+            val courtId = data["courtId"] as? String
+            val mode = data["mode"] as? String
+            val status = data["status"] as? String ?: "active"
             val maxPlayers = (data["maxPlayers"] as? Number)?.toInt() ?: 10
-            val playerCount= (data["playerCount"] as? Number)?.toInt() ?: 0
-            val hostUid    = data["hostUid"] as? String
-            val hostId     = data["hostId"] as? String
+            val playerCount = (data["playerCount"] as? Number)?.toInt() ?: 0
+            val hostUid = data["hostUid"] as? String
+            val hostId = data["hostId"] as? String
             @Suppress("UNCHECKED_CAST")
-            val playerIds  = (data["playerIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
-            val name       = data["name"] as? String
-            val startsAt   = data["startsAt"] as? com.google.firebase.Timestamp
-            val endsAt     = data["endsAt"] as? com.google.firebase.Timestamp
+            val playerIds =
+                (data["playerIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+            val name = data["name"] as? String
+            val startsAt = data["startsAt"] as? com.google.firebase.Timestamp
+            val endsAt = data["endsAt"] as? com.google.firebase.Timestamp
             return RunDoc(
-                ref, courtId, mode, status, maxPlayers, playerCount, hostUid, hostId, playerIds,
-                name, startsAt, endsAt
+                ref, courtId, mode, status, maxPlayers, playerCount,
+                hostUid, hostId, playerIds, name, startsAt, endsAt
             )
         }
     }
 }
 
 private fun formatWindow(
-    start: com.google.firebase.Timestamp?, end: com.google.firebase.Timestamp?
+    start: com.google.firebase.Timestamp?,
+    end: com.google.firebase.Timestamp?
 ): String {
     if (start == null || end == null) return "Time: not set"
     val zone = ZoneId.systemDefault()
@@ -361,9 +392,8 @@ private fun EditRunSheet(
     onDismiss: () -> Unit,
     onSave: (Map<String, Any?>) -> Unit
 ) {
-    // fields (respecting rules: startsAt locked when status == "active")
     var name by remember { mutableStateOf(run.name.orEmpty()) }
-    val modes = listOf("5v5","4v4","3v3","2v2","Open gym")
+    val modes = listOf("5v5", "4v4", "3v3", "2v2", "Open gym")
     var mode by remember { mutableStateOf(run.mode ?: "5v5") }
     var max by remember { mutableStateOf(run.maxPlayers) }
 
@@ -377,35 +407,49 @@ private fun EditRunSheet(
     val active = run.status == "active"
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Column(
+            Modifier
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
             Text("Edit run", style = MaterialTheme.typography.titleLarge)
 
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it.take(40) },
                 label = { Text("Run name") },
-                singleLine = true
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
             )
 
-            // Mode dropdown
             var expanded by remember { mutableStateOf(false) }
-            ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { expanded = it }
+            ) {
                 OutlinedTextField(
                     readOnly = true,
                     value = mode,
                     onValueChange = {},
                     label = { Text("Mode") },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
-                    modifier = Modifier.menuAnchor()
+                    modifier = Modifier
+                        .menuAnchor()
+                        .fillMaxWidth()
                 )
-                ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                ExposedDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
                     modes.forEach {
-                        DropdownMenuItem(text = { Text(it) }, onClick = { mode = it; expanded = false })
+                        DropdownMenuItem(
+                            text = { Text(it) },
+                            onClick = { mode = it; expanded = false }
+                        )
                     }
                 }
             }
 
-            // Capacity slider; can’t go below current players (rule)
             Column {
                 val minCap = run.playerIds.size.coerceAtLeast(2)
                 Text("Capacity: $max (min $minCap)")
@@ -417,11 +461,14 @@ private fun EditRunSheet(
                 )
             }
 
-            // Times (start locked for active)
             Text("Start time", style = MaterialTheme.typography.labelLarge)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { start = start.minusHours(1) }, enabled = !active) { Text("−1h") }
-                OutlinedButton(onClick = { start = start.plusHours(1) }, enabled = !active) { Text("+1h") }
+                OutlinedButton(onClick = { start = start.minusHours(1) }, enabled = !active) {
+                    Text("−1h")
+                }
+                OutlinedButton(onClick = { start = start.plusHours(1) }, enabled = !active) {
+                    Text("+1h")
+                }
                 Text(
                     DateTimeFormatter.ofPattern("EEE, MMM d • h:mm a").format(start),
                     modifier = Modifier.padding(top = 12.dp)
@@ -441,8 +488,15 @@ private fun EditRunSheet(
             val endAfterStart = end.isAfter(start)
             val endAfterNowIfActive = !active || end.isAfter(LocalDateTime.now())
 
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) { Text("Cancel") }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f)
+                ) { Text("Cancel") }
+
                 Button(
                     onClick = {
                         val patch = mutableMapOf<String, Any?>(
@@ -450,19 +504,23 @@ private fun EditRunSheet(
                             "mode" to mode,
                             "maxPlayers" to max,
                             "endsAt" to com.google.firebase.Timestamp(
-                                java.util.Date.from(end.atZone(ZoneId.systemDefault()).toInstant())
+                                java.util.Date.from(
+                                    end.atZone(ZoneId.systemDefault()).toInstant()
+                                )
                             ),
                             "lastHeartbeatAt" to FieldValue.serverTimestamp()
                         )
                         if (!active) {
                             patch["startsAt"] = com.google.firebase.Timestamp(
-                                java.util.Date.from(start.atZone(ZoneId.systemDefault()).toInstant())
+                                java.util.Date.from(
+                                    start.atZone(ZoneId.systemDefault()).toInstant()
+                                )
                             )
                         }
                         onSave(patch)
                     },
-                    modifier = Modifier.weight(1f),
-                    enabled = endAfterStart && endAfterNowIfActive && name.trim().length in 3..30
+                    enabled = endAfterStart && endAfterNowIfActive && name.trim().length in 3..30,
+                    modifier = Modifier.weight(1f)
                 ) { Text("Save") }
             }
 

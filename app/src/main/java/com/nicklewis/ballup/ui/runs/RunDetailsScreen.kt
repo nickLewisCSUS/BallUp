@@ -155,6 +155,7 @@ fun RunDetailsScreen(
                     val r = run!!
                     val open = (r.maxPlayers - r.playerCount).coerceAtLeast(0)
                     val ctx = LocalContext.current
+                    val isHost = uid != null && (r.hostId == uid || r.hostUid == uid)
 
                     // Header card (like CourtList cards)
                     Surface(
@@ -191,13 +192,29 @@ fun RunDetailsScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            if (open > 0) {
+
+                            // ---- Status line ----
+                            Text(
+                                text = "Status • " + when (r.status) {
+                                    "active" -> "Active"
+                                    "cancelled" -> "Cancelled"
+                                    "inactive" -> "Inactive"
+                                    else -> r.status ?: "Unknown"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (r.status != "active")
+                                    MaterialTheme.colorScheme.error
+                                else
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            if (open > 0 && r.status == "active") {
                                 Text(
                                     "$open spot${if (open == 1) "" else "s"} left",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.primary
                                 )
-                            } else {
+                            } else if (r.status == "active") {
                                 Text(
                                     "Full",
                                     style = MaterialTheme.typography.bodySmall,
@@ -205,6 +222,15 @@ fun RunDetailsScreen(
                                 )
                             }
                         }
+                    }
+
+                    // Notice when run is ended/cancelled
+                    if (r.status != "active") {
+                        Text(
+                            text = "This run has ended and is no longer joinable.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
 
                     // Players list card (NO LazyColumn here)
@@ -227,58 +253,90 @@ fun RunDetailsScreen(
                     }
 
                     // Actions row
+                    var joining by remember { mutableStateOf(false) }
+                    var leaving by remember { mutableStateOf(false) }
+                    var ending by remember { mutableStateOf(false) }
+
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        val joining = remember { mutableStateOf(false) }
-                        val leaving = remember { mutableStateOf(false) }
-
                         if (!isMember) {
                             val canJoin = r.status == "active" && open > 0 && uid != null
                             Button(
                                 onClick = {
                                     if (!canJoin) return@Button
-                                    joining.value = true
+                                    joining = true
                                     scope.launch {
                                         try {
                                             joinRun(db, runId, uid!!)
                                         } catch (e: Exception) {
                                             Log.e("RunDetails", "joinRun failed", e)
                                         } finally {
-                                            joining.value = false
+                                            joining = false
                                         }
                                     }
                                 },
-                                enabled = canJoin && !joining.value,
+                                enabled = canJoin && !joining,
                                 modifier = Modifier
                                     .weight(1f)
                                     .heightIn(min = 44.dp)
                             ) {
-                                Text(if (joining.value) "Joining…" else "Join Run")
+                                Text(if (joining) "Joining…" else "Join Run")
+                            }
+                        } else if (isHost) {
+                            // Host-specific: End the run instead of leaving like a normal player
+                            OutlinedButton(
+                                onClick = {
+                                    ending = true
+                                    scope.launch {
+                                        try {
+                                            r.ref.update(
+                                                mapOf(
+                                                    "status" to "cancelled",
+                                                    "lastHeartbeatAt" to FieldValue.serverTimestamp()
+                                                )
+                                            ).await()
+                                            // optional: pop back after ending
+                                            onBack?.invoke()
+                                        } catch (e: Exception) {
+                                            Log.e("RunDetails", "endRun failed", e)
+                                            error = "Failed to end run."
+                                        } finally {
+                                            ending = false
+                                        }
+                                    }
+                                },
+                                enabled = !ending && r.status == "active",
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 44.dp)
+                            ) {
+                                Text(if (ending) "Ending…" else "End Run")
                             }
                         } else {
+                            // Member but not host → can leave
                             OutlinedButton(
                                 onClick = {
                                     if (uid == null) return@OutlinedButton
-                                    leaving.value = true
+                                    leaving = true
                                     scope.launch {
                                         try {
                                             leaveRun(db, runId, uid)
                                         } catch (e: Exception) {
                                             Log.e("RunDetails", "leaveRun failed", e)
                                         } finally {
-                                            leaving.value = false
+                                            leaving = false
                                         }
                                     }
                                 },
-                                enabled = !leaving.value,
+                                enabled = !leaving,
                                 modifier = Modifier
                                     .weight(1f)
                                     .heightIn(min = 44.dp)
                             ) {
-                                Text(if (leaving.value) "Leaving…" else "Leave Run")
+                                Text(if (leaving) "Leaving…" else "Leave Run")
                             }
                         }
 
@@ -535,3 +593,4 @@ private fun EditRunSheet(
         }
     }
 }
+

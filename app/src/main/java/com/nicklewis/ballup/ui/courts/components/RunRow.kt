@@ -36,7 +36,9 @@ fun RunRow(
         rr.playerCount >= rr.maxPlayers -> "Full"
         else -> "Active"
     }
+
     val isJoined = currentUid != null && (rr.playerIds?.contains(currentUid) == true)
+    val isHost = currentUid != null && rr.hostId == currentUid
 
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(10.dp)) {
@@ -74,28 +76,43 @@ fun RunRow(
 
             Spacer(Modifier.height(6.dp))
 
-            // Footer: View (left) + Join/Leave (right)
+            // Footer: View/Manage (left) + Join/Leave (right for non-hosts)
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TextButton(onClick = onView) { Text("View") }
+                TextButton(onClick = onView) {
+                    Text(if (isHost) "Manage" else "View")
+                }
 
-                if (isJoined) {
-                    OutlinedButton(
-                        onClick = onLeave,
-                        shape = MaterialTheme.shapes.medium,
-                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                        modifier = Modifier.defaultMinSize(minWidth = 0.dp)
-                    ) { Text("Leave", style = MaterialTheme.typography.labelLarge) }
-                } else {
-                    FilledTonalButton(
-                        onClick = onJoin,
-                        shape = MaterialTheme.shapes.medium,
-                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                        modifier = Modifier.defaultMinSize(minWidth = 0.dp)
-                    ) { Text("Join", style = MaterialTheme.typography.labelLarge) }
+                when {
+                    !isJoined -> {
+                        FilledTonalButton(
+                            onClick = onJoin,
+                            shape = MaterialTheme.shapes.medium,
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            modifier = Modifier.defaultMinSize(minWidth = 0.dp)
+                        ) {
+                            Text("Join", style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
+
+                    isHost -> {
+                        // Host is already in — we don't show a generic "Leave" here.
+                        // They manage/end the run from the details screen.
+                    }
+
+                    else -> {
+                        OutlinedButton(
+                            onClick = onLeave,
+                            shape = MaterialTheme.shapes.medium,
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            modifier = Modifier.defaultMinSize(minWidth = 0.dp)
+                        ) {
+                            Text("Leave", style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
                 }
             }
         }

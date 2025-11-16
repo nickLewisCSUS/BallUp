@@ -7,7 +7,8 @@ data class RowRun(
     val endsAt: com.google.firebase.Timestamp?,
     val playerCount: Int,
     val maxPlayers: Int,
-    val playerIds: List<String>?
+    val playerIds: List<String>?,
+    val hostId: String? = null
 )
 data class CourtRow(
     val courtId: String,

@@ -340,6 +340,7 @@ fun CourtsMapScreen(
                                 ) {
                                     val alreadyIn = uid != null &&
                                             (currentRun.playerIds?.contains(uid) == true)
+                                    val isHost = uid != null && currentRun.hostId == uid
 
                                     if (!alreadyIn) {
                                         Button(
@@ -353,7 +354,8 @@ fun CourtsMapScreen(
                                             },
                                             modifier = Modifier.weight(1f)
                                         ) { Text("Join") }
-                                    } else {
+                                    } else if (!isHost) {
+                                        // Regular player can leave
                                         OutlinedButton(
                                             onClick = {
                                                 if (uid != null) {
@@ -367,10 +369,13 @@ fun CourtsMapScreen(
                                         ) { Text("Leave") }
                                     }
 
+                                    // Everyone (including host) can open details
                                     OutlinedButton(
                                         onClick = { onOpenRunDetails(runId) },
                                         modifier = Modifier.weight(1f)
-                                    ) { Text("View details") }
+                                    ) {
+                                        Text(if (isHost) "Manage run" else "View details")
+                                    }
                                 }
                             }
                         }

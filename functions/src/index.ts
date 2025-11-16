@@ -9,7 +9,7 @@ admin.initializeApp();
 setGlobalOptions({ region: "us-central1", maxInstances: 1 });
 
 // keep any other exports like cleanupStaleRuns
-export { cleanupStaleRuns } from "./cleanupRuns";
+export { cleanupStaleRuns, purgeOldFinishedRuns } from "./cleanupRuns";
 
 /** ---------- helpers ---------- */
 function sanitizeTopicId(raw: string) {

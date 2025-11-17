@@ -207,8 +207,8 @@ class BallUpMessagingService : FirebaseMessagingService() {
 
         // --- New run created / opened ---
         if (type == "run_created" || type == "run_open") {
-            val courtName = data["courtName"].orEmpty()
-            val runId = data["runId"].orEmpty()
+            val courtNameLocal = data["courtName"].orEmpty()
+            val runIdLocal = data["runId"].orEmpty()
             val mode = data["mode"].orEmpty()
             val maxPlayers = data["maxPlayers"].orEmpty()
             val startsAtMs = data["startsAt"]?.toLongOrNull()
@@ -217,13 +217,54 @@ class BallUpMessagingService : FirebaseMessagingService() {
                 android.text.format.DateFormat.format("EEE h:mm a", java.util.Date(it)).toString()
             } ?: "now"
 
-            val title = "New run at ${courtName.ifEmpty { "this court" }}"
+            val title = "New run at ${courtNameLocal.ifEmpty { "this court" }}"
             val text  = "$mode • up to $maxPlayers • starts $timeText"
 
             // In-app banner (Snackbar overlay)
-            NotifBus.emit(InAppAlert.RunCreated(title, courtName, runId, timeText))
+            NotifBus.emit(InAppAlert.RunCreated(title, courtNameLocal, runIdLocal, timeText))
 
             // System notification (same checks as before)
+            postSystemNotificationIfAllowed(
+                channelId = "runs",
+                title = title,
+                text = text,
+                deeplinkRunId = runIdLocal
+            )
+            return
+        }
+
+        // 👇👇👇 NEW BLOCK GOES *HERE* — before the fallback
+
+        // --- Run cancelled / ended ---
+        if ((type == "run_cancelled" || type == "run_ended") && runId.isNotEmpty()) {
+            val runName = data["runName"].orEmpty()
+
+            val title = when {
+                runName.isNotEmpty() -> "Run cancelled: $runName"
+                courtName.isNotEmpty() -> "Run cancelled at $courtName"
+                else -> "A run you joined was cancelled"
+            }
+
+            val text = buildString {
+                if (courtName.isNotEmpty()) {
+                    append("The run at ")
+                    append(courtName)
+                    append(" has been cancelled.")
+                } else {
+                    append("This run has been cancelled.")
+                }
+            }
+
+            // In-app banner
+            NotifBus.emit(
+                InAppAlert.RunCancelled(
+                    title = title,
+                    courtName = courtName,
+                    runId = runId
+                )
+            )
+
+            // System notification (deep links into the run details)
             postSystemNotificationIfAllowed(
                 channelId = "runs",
                 title = title,
@@ -232,7 +273,6 @@ class BallUpMessagingService : FirebaseMessagingService() {
             )
             return
         }
-
 
         // --- Fallback for notification-only messages (unchanged) ---
         val title = msg.notification?.title ?: "BallUp"

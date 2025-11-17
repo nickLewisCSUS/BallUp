@@ -30,4 +30,10 @@ sealed class InAppAlert {
         val runId: String,
         val minutes: Int
     ) : InAppAlert()
+
+    data class RunCancelled(
+        val title: String,
+        val courtName: String,
+        val runId: String
+    ) : InAppAlert()
 }

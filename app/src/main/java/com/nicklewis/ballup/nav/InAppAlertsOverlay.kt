@@ -54,7 +54,6 @@ fun InAppAlertsOverlay(nav: NavHostController) {
                     }
                 }
 
-                // 👇 Add this new branch right here
                 is InAppAlert.RunUpcoming -> {
                     val mins = evt.minutes
                     val timeText = when (mins) {
@@ -65,6 +64,21 @@ fun InAppAlertsOverlay(nav: NavHostController) {
 
                     val res = snack.showSnackbar(
                         message = "${evt.title} · starts $timeText at ${evt.courtName}",
+                        actionLabel = "View",
+                        withDismissAction = true,
+                        duration = SnackbarDuration.Short
+                    )
+                    if (res == SnackbarResult.ActionPerformed) {
+                        nav.navigate("run/${evt.runId}") {
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                }
+
+                is InAppAlert.RunCancelled -> {
+                    val res = snack.showSnackbar(
+                        message = "${evt.title} · Tap to view details",
                         actionLabel = "View",
                         withDismissAction = true,
                         duration = SnackbarDuration.Short

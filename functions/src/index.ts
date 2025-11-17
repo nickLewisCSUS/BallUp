@@ -11,6 +11,10 @@ setGlobalOptions({ region: "us-central1", maxInstances: 1 });
 // keep any other exports like cleanupStaleRuns
 export { cleanupStaleRuns, purgeOldFinishedRuns } from "./cleanupRuns";
 
+const db = admin.firestore();
+const messaging = admin.messaging();
+
+
 /** ---------- helpers ---------- */
 function sanitizeTopicId(raw: string) {
   return raw.replace(/[^A-Za-z0-9_\-.]/g, "_");
@@ -331,6 +335,110 @@ export const notifyUpcomingRuns = onSchedule("every 5 minutes", async () => {
     10,
     "upcoming10mNotified"
   );
+});
+
+/**
+ * When a run transitions from active → cancelled,
+ * notify all players that the run was cancelled.
+ */
+export const notifyRunCancelled = onDocumentUpdated("runs/{runId}", async (event) => {
+  const before = event.data?.before?.data();
+  const after  = event.data?.after?.data();
+  const runId  = event.params.runId;
+
+  if (!before || !after) return;
+
+  const prevStatus = before.status as string | undefined;
+  const newStatus  = after.status as string | undefined;
+
+  // Only fire when going from active -> cancelled
+  if (prevStatus === newStatus) return;
+  if (prevStatus !== "active" || newStatus !== "cancelled") return;
+
+  const courtId   = after.courtId as string | undefined;
+  const runName   = after.name as string | undefined;
+  const playerIds = (after.playerIds as string[] | undefined) ?? [];
+
+  if (!playerIds.length) {
+    logger.info(`[notifyRunCancelled] No players on run ${runId}, skipping.`);
+    return;
+  }
+
+  // --- Get court name (optional but nice) ---
+  let courtName = "";
+  if (courtId) {
+    try {
+      const courtSnap = await db.collection("courts").doc(courtId).get();
+      courtName = (courtSnap.data()?.name as string | undefined) ?? "";
+    } catch (err) {
+      logger.warn(`[notifyRunCancelled] Failed to load court ${courtId}`, err);
+    }
+  }
+
+  // --- Collect FCM tokens for all players ---
+  const tokens: string[] = [];
+
+  try {
+    const tokenPromises = playerIds.map(async (uid) => {
+      const snap = await db
+        .collection("users")
+        .doc(uid)
+        .collection("tokens")    // same subcollection as notifyUpcomingWindow
+        .get();
+
+      snap.docs.forEach((doc: any) => {
+        const t = doc.id;  // using doc ID as token, same as notifyUpcomingWindow
+        if (t && typeof t === "string") {
+          tokens.push(t);
+        }
+      });
+    });
+
+    await Promise.all(tokenPromises);
+  } catch (err) {
+    logger.error("[notifyRunCancelled] Error fetching tokens:", err);
+    return;
+  }
+
+  if (!tokens.length) {
+    logger.info(`[notifyRunCancelled] No tokens for run ${runId}, skipping send.`);
+    return;
+  }
+
+  // --- Build message payload ---
+  const payload: admin.messaging.MulticastMessage = {
+    tokens,
+    data: {
+      type: "run_cancelled",
+      runId,
+      courtName: courtName || "",
+      runName: runName || "",
+    },
+  };
+
+  try {
+    const resp = await messaging.sendEachForMulticast(payload);
+    logger.info(
+      `[notifyRunCancelled] Sent to ${tokens.length} tokens, success=${resp.successCount}, failure=${resp.failureCount}`
+    );
+
+    // Optional: log invalid tokens for cleanup
+    resp.responses.forEach((r: any, idx: number) => {
+      if (!r.success && r.error) {
+        const errCode = r.error.code;
+        if (
+          errCode === "messaging/invalid-registration-token" ||
+          errCode === "messaging/registration-token-not-registered"
+        ) {
+          logger.warn(
+            `[notifyRunCancelled] Invalid token, consider deleting: ${tokens[idx]}`
+          );
+        }
+      }
+    });
+  } catch (err) {
+    logger.error("[notifyRunCancelled] Failed to send multicast:", err);
+  }
 });
 
 

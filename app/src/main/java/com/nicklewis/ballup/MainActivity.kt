@@ -11,13 +11,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.lifecycle.lifecycleScope
 import com.google.firebase.auth.FirebaseAuth
-import com.nicklewis.ballup.data.TokenRepository
-import com.nicklewis.ballup.nav.AppNavControllerHolder
-import com.nicklewis.ballup.nav.BallUpApp
-import kotlinx.coroutines.launch
-import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.functions.FirebaseFunctions
+import com.google.firebase.messaging.FirebaseMessaging
+import com.nicklewis.ballup.data.TokenRepository
+import com.nicklewis.ballup.nav.AppNavControllerHolder
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -34,8 +33,16 @@ class MainActivity : ComponentActivity() {
                         val courtId = doc.id
                         Log.d("TOPICS", "subscribing to court_$courtId")
                         fns.getHttpsCallable("setCourtTopicSubscription")
-                            .call(mapOf("token" to token, "courtId" to courtId, "subscribe" to true))
-                            .addOnFailureListener { e -> Log.e("TOPICS", "subscribe failed $courtId", e) }
+                            .call(
+                                mapOf(
+                                    "token" to token,
+                                    "courtId" to courtId,
+                                    "subscribe" to true
+                                )
+                            )
+                            .addOnFailureListener { e ->
+                                Log.e("TOPICS", "subscribe failed $courtId", e)
+                            }
                     }
                 }
                 .addOnFailureListener { e -> Log.e("TOPICS", "stars fetch failed", e) }
@@ -53,10 +60,13 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Ensure signed in (anon ok) before UI; also save FCM token
-        signInAnonIfNeeded()
+        // ❌ OLD: we auto-signed in anonymously
+        // signInAnonIfNeeded()
 
-        setContent { BallUpApp() }
+        // ✅ NEW: let Compose decide based on FirebaseAuth currentUser
+        setContent {
+            BallUpAppRoot()
+        }
 
         // Handle push deep link (works on cold start)
         handleDeeplink(intent)
@@ -81,6 +91,9 @@ class MainActivity : ComponentActivity() {
         intent.removeExtra("deeplink_runId")
     }
 
+    // You can keep this for later if you want to reuse the logic,
+    // but it's no longer called automatically.
+    @Suppress("unused")
     private fun signInAnonIfNeeded() {
         val auth = FirebaseAuth.getInstance()
         if (auth.currentUser == null) {

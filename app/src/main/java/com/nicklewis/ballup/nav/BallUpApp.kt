@@ -37,8 +37,9 @@ const val ROUTE_RUN = "run/{runId}"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BallUpApp() {
-
+fun BallUpApp(
+    onSignOut: () -> Unit
+) {
     val nav = rememberNavController()
     val items = listOf(Screen.Map, Screen.List, Screen.Settings)
     var showAddCourt by remember { mutableStateOf(false) }
@@ -92,8 +93,6 @@ fun BallUpApp() {
             }
         }
     ) { padding ->
-
-        // Apply the scaffold's padding and status bar inset here
         androidx.compose.foundation.layout.Box(
             Modifier
                 .fillMaxSize()
@@ -116,7 +115,12 @@ fun BallUpApp() {
                     )
                 }
                 composable(Screen.List.route) { CourtsListScreen() }
-                composable(Screen.Settings.route) { SettingsScreen() }
+
+                // 🔹 Pass onSignOut down to Settings
+                composable(Screen.Settings.route) {
+                    SettingsScreen(onSignOut = onSignOut)
+                }
+
                 composable(
                     route = ROUTE_RUN,
                     arguments = listOf(navArgument("runId") { type = NavType.StringType })
@@ -125,13 +129,11 @@ fun BallUpApp() {
                     RunDetailsScreen(runId = runId, onBack = { nav.popBackStack() })
                 }
 
-                //
                 composable("court/{courtId}/runs") { backStack ->
                     val courtId = backStack.arguments?.getString("courtId") ?: return@composable
                     com.nicklewis.ballup.ui.courts.CourtRunsScreen(courtId = courtId)
                 }
             }
-            // This sits above the NavHost
             InAppAlertsOverlay(nav)
         }
     }

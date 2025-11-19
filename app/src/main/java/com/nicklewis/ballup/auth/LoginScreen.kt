@@ -30,6 +30,10 @@ fun LoginScreen(
     val isLoading by authViewModel.isLoading.collectAsState()
     val errorMessage by authViewModel.errorMessage.collectAsState()
 
+    LaunchedEffect(Unit) {
+        authViewModel.checkExistingUserAndRoute()
+    }
+
     // Build Google Sign-In options once, using the web client ID
     val gso = remember {
         GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)

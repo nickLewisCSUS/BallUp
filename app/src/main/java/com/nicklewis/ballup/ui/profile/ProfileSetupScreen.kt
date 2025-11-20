@@ -2,6 +2,8 @@ package com.nicklewis.ballup.ui.profile
 
 import android.util.Log
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -10,7 +12,6 @@ import com.google.firebase.Timestamp
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
-import com.nicklewis.ballup.model.UserProfile
 
 @Composable
 fun ProfileSetupScreen(
@@ -20,19 +21,71 @@ fun ProfileSetupScreen(
 ) {
     val db = remember { Firebase.firestore }
 
+    // Core profile fields
     var username by remember { mutableStateOf("") }
     var skillLevel by remember { mutableStateOf("Beginner") }
     val skillOptions = listOf("Beginner", "Intermediate", "Advanced")
 
+    // New: play style
+    val playStyleOptions = listOf(
+        "Shooter",
+        "Slasher / Driver",
+        "Playmaker",
+        "Lockdown Defender",
+        "Big Man / Post Player",
+        "3-and-D",
+        "All-Around",
+        "Hustle / Energy"
+    )
+    var playStyle by remember { mutableStateOf("Select (optional)") }
+
+    // New: height bracket
+    val heightOptions = listOf(
+        "Select (optional)",
+        "Under 5'6\"",
+        "5'6\" – 5'9\"",
+        "5'10\" – 6'1\"",
+        "6'2\" – 6'5\"",
+        "6'6\" – 6'9\"",
+        "6'10\"+"
+    )
+    var heightBracket by remember { mutableStateOf("Select (optional)") }
+
+    // New: favorite courts
+    var availableCourts by remember { mutableStateOf<List<String>>(emptyList()) }
+    var favoriteCourts by remember { mutableStateOf<List<String>>(emptyList()) }
+    var courtsLoading by remember { mutableStateOf(false) }
+
     var isSaving by remember { mutableStateOf(false) }
     var errorText by remember { mutableStateOf<String?>(null) }
+
+    // Load court names from Firestore (optional, best-effort)
+    LaunchedEffect(Unit) {
+        courtsLoading = true
+        db.collection("courts")
+            .get()
+            .addOnSuccessListener { snap ->
+                val names = snap.documents
+                    .mapNotNull { it.getString("name") }
+                    .distinct()
+                    .sorted()
+                availableCourts = names
+                courtsLoading = false
+            }
+            .addOnFailureListener { e ->
+                Log.w("ProfileSetup", "Failed to load courts", e)
+                courtsLoading = false
+            }
+    }
 
     Column(
         Modifier
             .fillMaxSize()
             .padding(16.dp)
+            .verticalScroll(rememberScrollState())
     ) {
-        Text("Finish setting up your account",
+        Text(
+            "Finish setting up your account",
             style = MaterialTheme.typography.headlineSmall
         )
         Spacer(Modifier.height(8.dp))
@@ -40,6 +93,7 @@ fun ProfileSetupScreen(
 
         Spacer(Modifier.height(24.dp))
 
+        // Username
         OutlinedTextField(
             value = username,
             onValueChange = { username = it.trim() },
@@ -48,14 +102,105 @@ fun ProfileSetupScreen(
             modifier = Modifier.fillMaxWidth()
         )
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(16.dp))
 
-        Text("Skill level")
+        // Skill level
+        Text("Skill level", style = MaterialTheme.typography.labelMedium)
         SkillLevelDropdown(
             selected = skillLevel,
             options = skillOptions,
             onSelectedChange = { skillLevel = it }
         )
+
+        Spacer(Modifier.height(16.dp))
+
+        // Play style (optional)
+        Text("Preferred play style (optional)", style = MaterialTheme.typography.labelMedium)
+        PlayStyleDropdown(
+            selected = playStyle,
+            options = playStyleOptions,
+            onSelectedChange = { playStyle = it }
+        )
+
+        Spacer(Modifier.height(16.dp))
+
+        // Height bracket (optional)
+        Text("Height bracket (optional)", style = MaterialTheme.typography.labelMedium)
+        HeightBracketDropdown(
+            selected = heightBracket,
+            options = heightOptions,
+            onSelectedChange = { heightBracket = it }
+        )
+
+        Spacer(Modifier.height(16.dp))
+
+        // Favorite courts (optional)
+        Text("Favorite courts (optional)", style = MaterialTheme.typography.labelMedium)
+        if (courtsLoading) {
+            Row(
+                modifier = Modifier.padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CircularProgressIndicator(
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(18.dp)
+                )
+                Text("Loading courts…", style = MaterialTheme.typography.bodySmall)
+            }
+        } else if (availableCourts.isEmpty()) {
+            Text(
+                "No courts found yet. You can add favorites later in Settings.",
+                style = MaterialTheme.typography.bodySmall
+            )
+        } else {
+            Text(
+                "Choose up to 3 courts you hoop at the most.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                availableCourts.forEach { courtName ->
+                    val checked = favoriteCourts.contains(courtName)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Start
+                    ) {
+                        Checkbox(
+                            checked = checked,
+                            onCheckedChange = { isChecked ->
+                                favoriteCourts =
+                                    if (isChecked) {
+                                        if (favoriteCourts.size >= 3) {
+                                            // Ignore extra beyond 3
+                                            favoriteCourts
+                                        } else {
+                                            favoriteCourts + courtName
+                                        }
+                                    } else {
+                                        favoriteCourts - courtName
+                                    }
+                            }
+                        )
+                        Text(
+                            courtName,
+                            modifier = Modifier
+                                .padding(top = 10.dp)
+                        )
+                    }
+                }
+
+                if (favoriteCourts.size >= 3) {
+                    Text(
+                        "You’ve selected the maximum of 3 courts.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
 
         Spacer(Modifier.height(16.dp))
 
@@ -78,6 +223,11 @@ fun ProfileSetupScreen(
                         displayName = displayName,
                         username = username,
                         skillLevel = skillLevel,
+                        playStyle = playStyle
+                            .takeIf { it.isNotBlank() && it != "Select (optional)" },
+                        heightBracket = heightBracket
+                            .takeIf { it.isNotBlank() && it != "Select (optional)" },
+                        favoriteCourts = favoriteCourts,
                         onError = {
                             errorText = it
                             isSaving = false
@@ -145,11 +295,96 @@ fun SkillLevelDropdown(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PlayStyleDropdown(
+    selected: String,
+    options: List<String>,
+    onSelectedChange: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded }
+    ) {
+        OutlinedTextField(
+            value = selected,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Play style") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+            modifier = Modifier
+                .menuAnchor()
+                .fillMaxWidth()
+        )
+
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option) },
+                    onClick = {
+                        onSelectedChange(option)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HeightBracketDropdown(
+    selected: String,
+    options: List<String>,
+    onSelectedChange: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded }
+    ) {
+        OutlinedTextField(
+            value = selected,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Height bracket") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+            modifier = Modifier
+                .menuAnchor()
+                .fillMaxWidth()
+        )
+
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option) },
+                    onClick = {
+                        onSelectedChange(option)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
 private fun saveUserProfile(
     uid: String,
     displayName: String?,
     username: String,
     skillLevel: String,
+    playStyle: String?,
+    heightBracket: String?,
+    favoriteCourts: List<String>,
     onError: (String) -> Unit,
     onSuccess: () -> Unit
 ) {
@@ -161,7 +396,7 @@ private fun saveUserProfile(
         return
     }
 
-    // Optional: enforce unique usernames
+    // Enforce unique usernames
     db.collection("users")
         .whereEqualTo("username", username)
         .limit(1)
@@ -174,19 +409,28 @@ private fun saveUserProfile(
 
             val now = Timestamp.now()
 
-            val profile = UserProfile(
-                uid = uid,
-                displayName = displayName,
-                username = username,
-                skillLevel = skillLevel,
-                createdAt = now,
-                updatedAt = now
+            val profileData = mutableMapOf<String, Any?>(
+                "uid" to uid,
+                "displayName" to displayName,
+                "username" to username,
+                "skillLevel" to skillLevel,
+                "createdAt" to now,
+                "updatedAt" to now
             )
 
-            // This is the "JSON" you were asking about, written from code:
+            if (!playStyle.isNullOrBlank()) {
+                profileData["playStyle"] = playStyle
+            }
+            if (!heightBracket.isNullOrBlank()) {
+                profileData["heightBracket"] = heightBracket
+            }
+            if (favoriteCourts.isNotEmpty()) {
+                profileData["favoriteCourts"] = favoriteCourts
+            }
+
             db.collection("users")
                 .document(uid)
-                .set(profile, SetOptions.merge()) // merge keeps stars/tokens
+                .set(profileData, SetOptions.merge()) // merge keeps stars/tokens
                 .addOnSuccessListener { onSuccess() }
                 .addOnFailureListener { e ->
                     onError("Failed to save profile: ${e.message}")
@@ -196,4 +440,3 @@ private fun saveUserProfile(
             onError("Failed to check username: ${e.message}")
         }
 }
-

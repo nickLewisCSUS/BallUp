@@ -51,6 +51,10 @@ fun RunDetailsScreen(
     var isMember by remember { mutableStateOf(false) }
     var showEdit by remember { mutableStateOf(false) }
 
+    // Host + players profile info
+    var hostProfile by remember { mutableStateOf<PlayerProfile?>(null) }
+    var playerProfiles by remember { mutableStateOf<Map<String, PlayerProfile>>(emptyMap()) }
+
     // ----- listen to run -----
     DisposableEffect(runId) {
         var reg: ListenerRegistration? = null
@@ -108,6 +112,36 @@ fun RunDetailsScreen(
         }
     }
 
+    // ----- host profile lookup -----
+    LaunchedEffect(run?.hostUid ?: run?.hostId) {
+        val r = run ?: return@LaunchedEffect
+        hostProfile = null
+
+        val hostUid = r.hostUid ?: r.hostId
+        if (hostUid.isNullOrBlank()) return@LaunchedEffect
+
+        hostProfile = lookupUserProfile(db, hostUid)
+    }
+
+    // ----- player profiles lookup -----
+    LaunchedEffect(run?.playerIds?.joinToString(",")) {
+        val r = run ?: return@LaunchedEffect
+        val ids = r.playerIds
+        if (ids.isEmpty()) {
+            playerProfiles = emptyMap()
+            return@LaunchedEffect
+        }
+
+        val map = mutableMapOf<String, PlayerProfile>()
+        for (id in ids) {
+            val profile = lookupUserProfile(db, id)
+            if (profile != null) {
+                map[id] = profile
+            }
+        }
+        playerProfiles = map
+    }
+
     // ----- UI -----
     Scaffold(
         topBar = {
@@ -139,7 +173,7 @@ fun RunDetailsScreen(
                 .fillMaxSize()
                 .verticalScroll(scrollState)
                 .padding(horizontal = 16.dp)
-                .padding(top = 16.dp, bottom = 56.dp), // give room above bottom nav
+                .padding(top = 16.dp, bottom = 56.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             when {
@@ -156,8 +190,9 @@ fun RunDetailsScreen(
                     val open = (r.maxPlayers - r.playerCount).coerceAtLeast(0)
                     val ctx = LocalContext.current
                     val isHost = uid != null && (r.hostId == uid || r.hostUid == uid)
+                    val hostUidForSort = r.hostUid ?: r.hostId
 
-                    // Header card (like CourtList cards)
+                    // Header card
                     Surface(
                         tonalElevation = 2.dp,
                         shape = MaterialTheme.shapes.medium,
@@ -193,7 +228,6 @@ fun RunDetailsScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
 
-                            // ---- Status line ----
                             Text(
                                 text = "Status • " + when (r.status) {
                                     "active" -> "Active"
@@ -233,7 +267,7 @@ fun RunDetailsScreen(
                         )
                     }
 
-                    // Players list card (NO LazyColumn here)
+                    // Players list card – cleaner tags layout
                     if (r.playerIds.isNotEmpty()) {
                         Text("Players", style = MaterialTheme.typography.titleMedium)
                         Surface(
@@ -243,10 +277,66 @@ fun RunDetailsScreen(
                         ) {
                             Column(
                                 modifier = Modifier.padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                r.playerIds.forEach { pid ->
-                                    Text("• $pid", style = MaterialTheme.typography.bodyMedium)
+                                // Host first, then others by username
+                                val sortedIds = r.playerIds.sortedWith(
+                                    compareBy(
+                                        { pid -> if (pid == hostUidForSort) 0 else 1 },
+                                        { pid -> playerProfiles[pid]?.username ?: "" }
+                                    )
+                                )
+
+                                sortedIds.forEach { pid ->
+                                    val profile = playerProfiles[pid]
+                                    val isRowHost = pid == hostUidForSort
+
+                                    Column(
+                                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Text(
+                                                text = profile?.username ?: pid,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = if (isRowHost) FontWeight.SemiBold else FontWeight.Normal
+                                            )
+                                            if (isRowHost) {
+                                                AssistChip(
+                                                    onClick = {},
+                                                    enabled = false,
+                                                    label = { Text("Host") }
+                                                )
+                                            }
+                                        }
+
+                                        // Compact tags line: skill • playstyle • height
+                                        val tagPieces = listOfNotNull(
+                                            profile?.skillLevel,
+                                            profile?.playStyle,
+                                            profile?.heightBracket
+                                        )
+                                        if (tagPieces.isNotEmpty()) {
+                                            Text(
+                                                text = tagPieces.joinToString(" • "),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+
+                                        // Favorite courts
+                                        val fav = profile?.favoriteCourts
+                                        if (fav != null && fav.isNotEmpty()) {
+                                            Text(
+                                                text = "Courts: ${fav.joinToString(", ")}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -286,7 +376,6 @@ fun RunDetailsScreen(
                                 Text(if (joining) "Joining…" else "Join Run")
                             }
                         } else if (isHost) {
-                            // Host-specific: End the run instead of leaving like a normal player
                             OutlinedButton(
                                 onClick = {
                                     ending = true
@@ -298,7 +387,6 @@ fun RunDetailsScreen(
                                                     "lastHeartbeatAt" to FieldValue.serverTimestamp()
                                                 )
                                             ).await()
-                                            // optional: pop back after ending
                                             onBack?.invoke()
                                         } catch (e: Exception) {
                                             Log.e("RunDetails", "endRun failed", e)
@@ -316,7 +404,6 @@ fun RunDetailsScreen(
                                 Text(if (ending) "Ending…" else "End Run")
                             }
                         } else {
-                            // Member but not host → can leave
                             OutlinedButton(
                                 onClick = {
                                     if (uid == null) return@OutlinedButton
@@ -359,8 +446,13 @@ fun RunDetailsScreen(
                     }
 
                     Spacer(Modifier.height(8.dp))
+                    val hostLabel = hostProfile?.username
+                        ?: hostProfile?.displayName
+                        ?: r.hostId
+                        ?: r.hostUid
+                        ?: "unknown"
                     Text(
-                        text = "Host: ${r.hostId ?: r.hostUid ?: "unknown"}",
+                        text = "Host: $hostLabel",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -388,7 +480,7 @@ fun RunDetailsScreen(
     }
 }
 
-/* ---------- Helpers & local model ---------- */
+/* ---------- Helpers & local models ---------- */
 
 private data class RunDoc(
     val ref: DocumentReference,
@@ -424,6 +516,49 @@ private data class RunDoc(
                 hostUid, hostId, playerIds, name, startsAt, endsAt
             )
         }
+    }
+}
+
+private data class PlayerProfile(
+    val username: String,
+    val skillLevel: String?,
+    val playStyle: String?,
+    val heightBracket: String?,
+    val favoriteCourts: List<String>,
+    val displayName: String?
+)
+
+private suspend fun lookupUserProfile(
+    db: FirebaseFirestore,
+    uid: String
+): PlayerProfile? {
+    return try {
+        val doc = db.collection("users").document(uid).get().await()
+        if (!doc.exists()) {
+            Log.d("PROFILE", "No user doc for $uid")
+            null
+        } else {
+            val username = doc.getString("username") ?: uid
+            val skillLevel = doc.getString("skillLevel")
+            val playStyle = doc.getString("playStyle")
+            val heightBracket = doc.getString("heightBracket")
+            val displayName = doc.getString("displayName")
+            @Suppress("UNCHECKED_CAST")
+            val fav = (doc.get("favoriteCourts") as? List<*>)?.mapNotNull { it as? String }
+                ?: emptyList()
+
+            PlayerProfile(
+                username = username,
+                skillLevel = skillLevel,
+                playStyle = playStyle,
+                heightBracket = heightBracket,
+                favoriteCourts = fav,
+                displayName = displayName
+            )
+        }
+    } catch (e: Exception) {
+        Log.e("PROFILE", "Error looking up $uid", e)
+        null
     }
 }
 
@@ -593,4 +728,6 @@ private fun EditRunSheet(
         }
     }
 }
+
+
 

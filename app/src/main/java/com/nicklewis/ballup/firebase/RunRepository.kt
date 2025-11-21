@@ -12,8 +12,8 @@ suspend fun startRun(
     hostUid: String,
     mode: String = "5v5",
     maxPlayers: Int = 10,
-    startsAtMillis: Long? = null,   // NEW (null => now)
-    endsAtMillis: Long? = null      // NEW (optional)
+    startsAtMillis: Long? = null,
+    endsAtMillis: Long? = null
 ): String {
     require(maxPlayers in 2..30) { "Max players must be between 2 and 30" }
 
@@ -72,21 +72,70 @@ suspend fun joinRun(db: FirebaseFirestore, runId: String, uid: String) {
     }.await()
 }
 
-/** Transactional LEAVE. */
+/**
+ * Leaves the run. Rules:
+ * - If a non-host leaves: just remove them from playerIds and decrement playerCount.
+ * - If the host leaves and there are other players:
+ *      -> transfer host to the next player and remove the old host.
+ * - If the host is the only player:
+ *      -> throw HOST_SOLO_CANNOT_LEAVE so UI can show "end/cancel the run instead".
+ */
 suspend fun leaveRun(db: FirebaseFirestore, runId: String, uid: String) {
+    val runRef = db.collection("runs").document(runId)
+
     db.runTransaction { tx ->
-        val ref  = db.collection("runs").document(runId)
-        val snap = tx.get(ref)
-        val run  = snap.toObject(Run::class.java) ?: return@runTransaction null
+        val snap = tx.get(runRef)
 
-        val current = (run.playerIds ?: emptyList()).toMutableList()
-        if (!current.remove(uid)) return@runTransaction null
+        if (!snap.exists()) {
+            throw IllegalStateException("Run not found")
+        }
 
-        tx.update(ref, mapOf(
-            "playerIds" to current,
-            "playerCount" to current.size.coerceAtLeast(0),
-            "lastHeartbeatAt" to FieldValue.serverTimestamp()
-        ))
+        val hostId = snap.getString("hostId")
+        @Suppress("UNCHECKED_CAST")
+        val playerIds = (snap.get("playerIds") as? List<String>) ?: emptyList()
+        val currentCount = snap.getLong("playerCount")?.toInt() ?: playerIds.size
+
+        // If user isn't in the run, nothing to do
+        if (!playerIds.contains(uid)) {
+            return@runTransaction null
+        }
+
+        // --- Host trying to leave
+        if (uid == hostId) {
+            // Host is the only player → not allowed
+            if (playerIds.size <= 1) {
+                throw IllegalStateException("HOST_SOLO_CANNOT_LEAVE")
+            }
+
+            val updatedPlayers = playerIds.filter { it != uid }
+            val updatedCount = (currentCount - 1).coerceAtLeast(0)
+
+            // Simple rule: next player in the list becomes host
+            val newHostId = updatedPlayers.firstOrNull()
+                ?: throw IllegalStateException("No remaining players for new host")
+
+            tx.update(
+                runRef,
+                mapOf(
+                    "playerIds" to updatedPlayers,
+                    "playerCount" to updatedCount,
+                    "hostId" to newHostId
+                )
+            )
+        } else {
+            // --- Regular player leaving
+            val updatedPlayers = playerIds.filter { it != uid }
+            val updatedCount = (currentCount - 1).coerceAtLeast(0)
+
+            tx.update(
+                runRef,
+                mapOf(
+                    "playerIds" to updatedPlayers,
+                    "playerCount" to updatedCount
+                )
+            )
+        }
+
         null
     }.await()
 }

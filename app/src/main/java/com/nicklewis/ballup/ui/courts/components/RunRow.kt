@@ -76,7 +76,7 @@ fun RunRow(
 
             Spacer(Modifier.height(6.dp))
 
-            // Footer: View/Manage (left) + Join/Leave (right for non-hosts)
+            // Footer: View/Manage (left) + Join/Leave
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -86,7 +86,10 @@ fun RunRow(
                     Text(if (isHost) "Manage" else "View")
                 }
 
+                val hostCanLeave = isHost && rr.playerCount > 1
+
                 when {
+                    // Not in this run yet → Join
                     !isJoined -> {
                         FilledTonalButton(
                             onClick = onJoin,
@@ -98,11 +101,24 @@ fun RunRow(
                         }
                     }
 
-                    isHost -> {
-                        // Host is already in — we don't show a generic "Leave" here.
-                        // They manage/end the run from the details screen.
+                    // Host leaving is allowed only if there are other players
+                    hostCanLeave -> {
+                        OutlinedButton(
+                            onClick = onLeave,
+                            shape = MaterialTheme.shapes.medium,
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            modifier = Modifier.defaultMinSize(minWidth = 0.dp)
+                        ) {
+                            Text("Leave", style = MaterialTheme.typography.labelLarge)
+                        }
                     }
 
+                    // Host but solo → no generic Leave button, they use Manage to end the run
+                    isHost -> {
+                        // Intentionally empty: only "Manage" is shown on the left.
+                    }
+
+                    // Regular player leaving
                     else -> {
                         OutlinedButton(
                             onClick = onLeave,
@@ -115,6 +131,7 @@ fun RunRow(
                     }
                 }
             }
+
         }
     }
 }

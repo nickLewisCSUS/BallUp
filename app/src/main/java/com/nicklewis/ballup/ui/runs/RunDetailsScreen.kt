@@ -346,6 +346,7 @@ fun RunDetailsScreen(
                     var joining by remember { mutableStateOf(false) }
                     var leaving by remember { mutableStateOf(false) }
                     var ending by remember { mutableStateOf(false) }
+                    var showCancelConfirm by remember { mutableStateOf(false) }
 
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -378,22 +379,8 @@ fun RunDetailsScreen(
                         } else if (isHost) {
                             OutlinedButton(
                                 onClick = {
-                                    ending = true
-                                    scope.launch {
-                                        try {
-                                            r.ref.update(
-                                                mapOf(
-                                                    "status" to "cancelled",
-                                                    "lastHeartbeatAt" to FieldValue.serverTimestamp()
-                                                )
-                                            ).await()
-                                            onBack?.invoke()
-                                        } catch (e: Exception) {
-                                            Log.e("RunDetails", "endRun failed", e)
-                                            error = "Failed to end run."
-                                        } finally {
-                                            ending = false
-                                        }
+                                    if (!ending && r.status == "active") {
+                                        showCancelConfirm = true
                                     }
                                 },
                                 enabled = !ending && r.status == "active",
@@ -401,7 +388,7 @@ fun RunDetailsScreen(
                                     .weight(1f)
                                     .heightIn(min = 44.dp)
                             ) {
-                                Text(if (ending) "Ending…" else "End Run")
+                                Text("Cancel Run")
                             }
                         } else {
                             OutlinedButton(
@@ -443,6 +430,58 @@ fun RunDetailsScreen(
                         ) {
                             Text("Directions")
                         }
+                    }
+
+                    // Cancel confirmation dialog for host
+                    if (showCancelConfirm) {
+                        AlertDialog(
+                            onDismissRequest = {
+                                if (!ending) showCancelConfirm = false
+                            },
+                            title = { Text("Cancel run?") },
+                            text = {
+                                Text(
+                                    "This will cancel the run for everyone. " +
+                                            "Players won’t be able to join and the run will be marked as cancelled."
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(
+                                    onClick = {
+                                        if (ending) return@TextButton
+                                        ending = true
+                                        scope.launch {
+                                            try {
+                                                r.ref.update(
+                                                    mapOf(
+                                                        "status" to "cancelled",
+                                                        "lastHeartbeatAt" to FieldValue.serverTimestamp()
+                                                    )
+                                                ).await()
+                                                showCancelConfirm = false
+                                                onBack?.invoke()
+                                            } catch (e: Exception) {
+                                                Log.e("RunDetails", "cancelRun failed", e)
+                                                error = "Failed to cancel run."
+                                            } finally {
+                                                ending = false
+                                            }
+                                        }
+                                    }
+                                ) {
+                                    Text(if (ending) "Cancelling…" else "Yes, cancel")
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(
+                                    onClick = {
+                                        if (!ending) showCancelConfirm = false
+                                    }
+                                ) {
+                                    Text("Keep run")
+                                }
+                            }
+                        )
                     }
 
                     Spacer(Modifier.height(8.dp))
@@ -728,6 +767,5 @@ private fun EditRunSheet(
         }
     }
 }
-
 
 

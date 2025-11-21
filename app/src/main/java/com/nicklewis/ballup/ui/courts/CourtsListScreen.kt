@@ -10,8 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
@@ -47,6 +46,8 @@ fun CourtsListScreen(
         viewModel(factory = PrefsViewModel.factory(ctx))
     val fused = remember { LocationServices.getFusedLocationProviderClient(ctx) }
 
+    val snackbarHostState = remember { SnackbarHostState() } // NEW
+
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
@@ -55,12 +56,9 @@ fun CourtsListScreen(
         if (granted) fetchLastKnownLocation(fused) { loc -> vm.userLoc = loc }
     }
 
-    // holds the courtId when the dialog is open
     var showCreate by remember { mutableStateOf<String?>(null) }
-    // holds inline error for the dialog
     var dialogError by remember { mutableStateOf<String?>(null) }
 
-    // NEW: starred filter state + starred court IDs
     var showStarredOnly by rememberSaveable { mutableStateOf(false) }
     val starredIds by starsVm.starred.collectAsState()
 
@@ -81,7 +79,6 @@ fun CourtsListScreen(
     val scope = rememberCoroutineScope()
     val db = remember { FirebaseFirestore.getInstance() }
 
-    // Apply the "Starred" filter on top of vm.rows
     val visibleRows = remember(vm.rows, showStarredOnly, starredIds) {
         if (!showStarredOnly) {
             vm.rows
@@ -90,136 +87,157 @@ fun CourtsListScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        SearchBarWithSuggestions(
-            query = vm.query,
-            onQueryChange = { vm.query = it },
-            active = vm.searchActive,
-            onActiveChange = { vm.searchActive = it },
-            suggestions = vm.suggestions,
-            onPickSuggestion = { pick ->
-                vm.query = pick
-                vm.searchActive = false
-            }
-        )
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) } // NEW
+    ) { scaffoldPadding ->
 
-        FilterBar(
-            showIndoor = vm.showIndoor,
-            showOutdoor = vm.showOutdoor,
-            sortMode = vm.sortMode,
-            onToggleIndoor = {
-                val newIndoor = !vm.showIndoor
-                // Only update if at least one surface will remain true
-                if (newIndoor || vm.showOutdoor) {
-                    vm.showIndoor = newIndoor
-                }
-            },
-            onToggleOutdoor = {
-                val newOutdoor = !vm.showOutdoor
-                if (newOutdoor || vm.showIndoor) {
-                    vm.showOutdoor = newOutdoor
-                }
-            },
-            onSortChange = { vm.sortMode = it },
-            modifier = Modifier.padding(bottom = 12.dp),
-            showStarredOnly = showStarredOnly,
-            onToggleStarredOnly = { showStarredOnly = !showStarredOnly }
-        )
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+                .padding(scaffoldPadding) // NEW
+        ) {
 
-        vm.error?.let {
-            Text(
-                "Error: $it",
-                color = MaterialTheme.colorScheme.error
+            SearchBarWithSuggestions(
+                query = vm.query,
+                onQueryChange = { vm.query = it },
+                active = vm.searchActive,
+                onActiveChange = { vm.searchActive = it },
+                suggestions = vm.suggestions,
+                onPickSuggestion = { pick ->
+                    vm.query = pick
+                    vm.searchActive = false
+                }
             )
-        }
 
-        if (vm.courts.isEmpty()) {
-            Text("No courts yet. Add one in Firestore to see it here.")
-        }
+            FilterBar(
+                showIndoor = vm.showIndoor,
+                showOutdoor = vm.showOutdoor,
+                sortMode = vm.sortMode,
+                onToggleIndoor = {
+                    val newIndoor = !vm.showIndoor
+                    if (newIndoor || vm.showOutdoor) {
+                        vm.showIndoor = newIndoor
+                    }
+                },
+                onToggleOutdoor = {
+                    val newOutdoor = !vm.showOutdoor
+                    if (newOutdoor || vm.showIndoor) {
+                        vm.showOutdoor = newOutdoor
+                    }
+                },
+                onSortChange = { vm.sortMode = it },
+                modifier = Modifier.padding(bottom = 12.dp),
+                showStarredOnly = showStarredOnly,
+                onToggleStarredOnly = { showStarredOnly = !showStarredOnly }
+            )
 
-        if (visibleRows.isEmpty() && vm.courts.isNotEmpty()) {
-            Text("No courts match your filter.")
-        } else if (visibleRows.isNotEmpty()) {
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(visibleRows, key = { it.courtId }) { row ->
-                    CourtCard(
-                        row = row,
-                        uid = uid,
-                        userLoc = vm.userLoc,
-                        onStartRun = { courtId ->
-                            dialogError = null
-                            showCreate = courtId
-                        },
-                        onJoinRun = { runId ->
-                            if (uid == null) {
-                                Log.e("Runs", "joinRun: not signed in")
-                                return@CourtCard
-                            }
-                            scope.launch {
-                                try {
-                                    joinRun(db, runId, uid)
-                                } catch (e: Exception) {
-                                    Log.e("Runs", "joinRun failed", e)
+            vm.error?.let {
+                Text(
+                    "Error: $it",
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+
+            if (vm.courts.isEmpty()) {
+                Text("No courts yet. Add one in Firestore to see it here.")
+            }
+
+            if (visibleRows.isEmpty() && vm.courts.isNotEmpty()) {
+                Text("No courts match your filter.")
+            } else if (visibleRows.isNotEmpty()) {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(visibleRows, key = { it.courtId }) { row ->
+                        CourtCard(
+                            row = row,
+                            uid = uid,
+                            userLoc = vm.userLoc,
+                            onStartRun = { courtId ->
+                                dialogError = null
+                                showCreate = courtId
+                            },
+                            onJoinRun = { runId ->
+                                if (uid == null) {
+                                    Log.e("Runs", "joinRun: not signed in")
+                                    return@CourtCard
                                 }
-                            }
-                        },
-                        onLeaveRun = { runId ->
-                            if (uid == null) {
-                                Log.e("Runs", "leaveRun: not signed in")
-                                return@CourtCard
-                            }
-                            scope.launch {
-                                try {
-                                    leaveRun(db, runId, uid)
-                                } catch (e: Exception) {
-                                    Log.e("Runs", "leaveRun failed", e)
+                                scope.launch {
+                                    try {
+                                        joinRun(db, runId, uid)
+                                    } catch (e: Exception) {
+                                        Log.e("Runs", "joinRun failed", e)
+                                    }
                                 }
-                            }
-                        },
-                        onViewRun = { runId ->
-                            AppNavControllerHolder.navController?.navigate("run/$runId") {
-                                launchSingleTop = true
-                                restoreState = true
-                            }
-                        },
-                        starsVm = starsVm,
-                        prefsVm = prefsVm
-                    )
+                            },
+                            onLeaveRun = { runId ->
+                                if (uid == null) {
+                                    Log.e("Runs", "leaveRun: not signed in")
+                                    return@CourtCard
+                                }
+                                scope.launch {
+                                    try {
+                                        leaveRun(db, runId, uid)
+                                    } catch (e: Exception) {
+                                        if (e.message?.contains("HOST_SOLO_CANNOT_LEAVE") == true) {
+                                            Log.w("Runs", "Host is solo and cannot leave; must end run.")
+                                            snackbarHostState.showSnackbar(
+                                                message = "You’re the only player in this run. Cancel it instead.",
+                                                withDismissAction = true
+                                            )
+                                        } else {
+                                            Log.e("Runs", "leaveRun failed", e)
+                                            snackbarHostState.showSnackbar(
+                                                message = "Couldn't leave the run. Please try again.",
+                                                withDismissAction = true
+                                            )
+                                        }
+                                    }
+                                }
+                            },
+                            onViewRun = { runId ->
+                                AppNavControllerHolder.navController?.navigate("run/$runId") {
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            },
+                            starsVm = starsVm,
+                            prefsVm = prefsVm
+                        )
+                    }
                 }
             }
-        }
 
-        showCreate?.let { courtId ->
-            StartRunDialog(
-                visible = true,
-                courtId = courtId,
-                onDismiss = {
-                    dialogError = null
-                    showCreate = null
-                },
-                onCreate = { run ->
-                    runsViewModel.createRunWithCapacity(
-                        run = run,
-                        onSuccess = {
-                            dialogError = null
-                            showCreate = null
-                        },
-                        onError = { e ->
-                            Log.e("RunsVM", "create failed", e)
-                            dialogError = humanizeCreateRunError(e) // show message inside dialog
-                        }
-                    )
-                },
-                errorMessage = dialogError
-            )
+            showCreate?.let { courtId ->
+                StartRunDialog(
+                    visible = true,
+                    courtId = courtId,
+                    onDismiss = {
+                        dialogError = null
+                        showCreate = null
+                    },
+                    onCreate = { run ->
+                        runsViewModel.createRunWithCapacity(
+                            run = run,
+                            onSuccess = {
+                                dialogError = null
+                                showCreate = null
+                            },
+                            onError = { e ->
+                                Log.e("RunsVM", "create failed", e)
+                                dialogError = humanizeCreateRunError(e)
+                            }
+                        )
+                    },
+                    errorMessage = dialogError
+                )
+            }
         }
     }
 }
 
-/** UI-only mapper that turns technical exceptions into friendly messages shown to users. */
 private fun humanizeCreateRunError(t: Throwable): String {
     val msg = t.message ?: ""
     return when {
@@ -237,8 +255,6 @@ private fun humanizeCreateRunError(t: Throwable): String {
             "Please pick a start time."
         "Missing end" in msg ->
             "Please pick an end time."
-
-        // Firestore index / permission style errors (optional catch-all):
         msg.contains("FAILED_PRECONDITION", ignoreCase = true) &&
                 msg.contains("index", ignoreCase = true) ->
             "Run search needs to finish setting up. Try again in a moment."
@@ -246,3 +262,4 @@ private fun humanizeCreateRunError(t: Throwable): String {
         else -> "Couldn't start the run. Please adjust the time or try again."
     }
 }
+

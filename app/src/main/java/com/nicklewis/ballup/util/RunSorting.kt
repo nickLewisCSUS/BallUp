@@ -28,6 +28,7 @@ private fun scoreForListing(nowMs: Long, r: Run): Long {
     }
 }
 
+// 🔁 UPDATED: include hostId + hostUid in RowRun
 private fun toRowRun(id: String, r: Run) = RowRun(
     id = id,
     name = r.name,
@@ -35,7 +36,9 @@ private fun toRowRun(id: String, r: Run) = RowRun(
     endsAt = r.endsAt,
     playerCount = r.playerCount,
     maxPlayers = r.maxPlayers,
-    playerIds = r.playerIds ?: emptyList()
+    playerIds = r.playerIds ?: emptyList(),
+    hostId = r.hostId,
+    hostUid = r.hostId   // Firestore uses hostId as the UID, so we mirror it here
 )
 
 // ----- single public API used by CourtsListViewModel -----
@@ -65,7 +68,12 @@ fun buildSortedCourtRows(
             .filter { (_, r) ->
                 val s = r.startsAt?.toDate()?.time
                 val e = r.endsAt?.toDate()?.time ?: s
-                if (s == null) false else (nowMs in s..(e ?: s)) || (s in nowMs..soonCutoff)
+                if (s == null) {
+                    false
+                } else {
+                    val end = e ?: s
+                    (nowMs in s..end) || (s in nowMs..soonCutoff)
+                }
             }
             .sortedBy { (_, r) -> scoreForListing(nowMs, r) }
 
@@ -83,7 +91,8 @@ fun buildSortedCourtRows(
     // final sorting (same modes you had before)
     return when (sortMode) {
         SortMode.CLOSEST -> rows.sortedBy { row ->
-            val lat = row.court.geo?.lat; val lng = row.court.geo?.lng
+            val lat = row.court.geo?.lat
+            val lng = row.court.geo?.lng
             if (lat != null && lng != null && userLoc != null)
                 distanceKm(userLoc.latitude, userLoc.longitude, lat, lng)
             else Double.POSITIVE_INFINITY

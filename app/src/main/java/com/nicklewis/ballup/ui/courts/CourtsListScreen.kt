@@ -46,7 +46,7 @@ fun CourtsListScreen(
         viewModel(factory = PrefsViewModel.factory(ctx))
     val fused = remember { LocationServices.getFusedLocationProviderClient(ctx) }
 
-    val snackbarHostState = remember { SnackbarHostState() } // NEW
+    val snackbarHostState = remember { SnackbarHostState() }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -88,14 +88,14 @@ fun CourtsListScreen(
     }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) } // NEW
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { scaffoldPadding ->
 
         Column(
             Modifier
                 .fillMaxSize()
                 .padding(16.dp)
-                .padding(scaffoldPadding) // NEW
+                .padding(scaffoldPadding)
         ) {
 
             SearchBarWithSuggestions(
@@ -182,7 +182,7 @@ fun CourtsListScreen(
                                         leaveRun(db, runId, uid)
                                     } catch (e: Exception) {
                                         if (e.message?.contains("HOST_SOLO_CANNOT_LEAVE") == true) {
-                                            Log.w("Runs", "Host is solo and cannot leave; must end run.")
+                                            Log.w("Runs", "Host is solo and cannot leave; must cancel run.")
                                             snackbarHostState.showSnackbar(
                                                 message = "You’re the only player in this run. Cancel it instead.",
                                                 withDismissAction = true
@@ -262,4 +262,3 @@ private fun humanizeCreateRunError(t: Throwable): String {
         else -> "Couldn't start the run. Please adjust the time or try again."
     }
 }
-

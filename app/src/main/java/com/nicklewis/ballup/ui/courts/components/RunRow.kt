@@ -2,7 +2,7 @@ package com.nicklewis.ballup.ui.courts.components
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -37,13 +37,22 @@ fun RunRow(
         else -> "Active"
     }
 
-    val isJoined = currentUid != null && (rr.playerIds?.contains(currentUid) == true)
-    val isHost = currentUid != null && rr.hostId == currentUid
+    val isJoined = currentUid != null && rr.playerIds?.contains(currentUid) == true
+
+    // RowRun only has hostId, so we just compare against that
+    val isHost = currentUid != null && (
+            rr.hostId == currentUid ||
+                    rr.hostUid == currentUid
+            )
+
+    // Host is allowed to leave only if more than 1 player exists
+    val hostCanLeave = isHost && rr.playerCount > 1
+
+    var showLeaveConfirm by remember { mutableStateOf(false) }
 
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(10.dp)) {
 
-            // Header: run name (single line) + status pill
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -59,8 +68,8 @@ fun RunRow(
                 StatusPill(text = status, filled = status == "Full")
             }
 
-            // Subline: time + players
             Spacer(Modifier.height(2.dp))
+
             Text(
                 text = buildString {
                     if (timeLabel.isNotBlank()) append(timeLabel)
@@ -76,69 +85,96 @@ fun RunRow(
 
             Spacer(Modifier.height(6.dp))
 
-            // Footer: View/Manage (left) + Join/Leave
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+
                 TextButton(onClick = onView) {
                     Text(if (isHost) "Manage" else "View")
                 }
 
-                val hostCanLeave = isHost && rr.playerCount > 1
-
                 when {
-                    // Not in this run yet → Join
                     !isJoined -> {
                         FilledTonalButton(
                             onClick = onJoin,
                             shape = MaterialTheme.shapes.medium,
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                            modifier = Modifier.defaultMinSize(minWidth = 0.dp)
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                         ) {
                             Text("Join", style = MaterialTheme.typography.labelLarge)
                         }
                     }
 
-                    // Host leaving is allowed only if there are other players
+                    // Host with multiple players → host-transfer confirm dialog
                     hostCanLeave -> {
                         OutlinedButton(
-                            onClick = onLeave,
+                            onClick = { showLeaveConfirm = true },
                             shape = MaterialTheme.shapes.medium,
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                            modifier = Modifier.defaultMinSize(minWidth = 0.dp)
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                         ) {
                             Text("Leave", style = MaterialTheme.typography.labelLarge)
                         }
                     }
 
-                    // Host but solo → no generic Leave button, they use Manage to end the run
-                    isHost -> {
-                        // Intentionally empty: only "Manage" is shown on the left.
-                    }
+                    // Solo host → cannot leave (Manage button only)
+                    isHost -> Unit
 
-                    // Regular player leaving
+                    // Normal player → confirm leave
                     else -> {
                         OutlinedButton(
-                            onClick = onLeave,
+                            onClick = { showLeaveConfirm = true },
                             shape = MaterialTheme.shapes.medium,
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                            modifier = Modifier.defaultMinSize(minWidth = 0.dp)
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                         ) {
                             Text("Leave", style = MaterialTheme.typography.labelLarge)
                         }
                     }
                 }
             }
-
         }
+    }
+
+    // CONFIRMATION DIALOG (HOST + REGULAR)
+    if (showLeaveConfirm) {
+        AlertDialog(
+            onDismissRequest = { showLeaveConfirm = false },
+            title = {
+                Text(
+                    if (hostCanLeave) "Leave run?"
+                    else "Confirm leave"
+                )
+            },
+            text = {
+                Text(
+                    if (hostCanLeave)
+                        "You are the host. If you leave now, host duties will be transferred to another player.\n\nAre you sure you want to leave?"
+                    else
+                        "Are you sure you want to leave this run?"
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showLeaveConfirm = false
+                        onLeave()
+                    }
+                ) { Text("Leave") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLeaveConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 
 @Composable
 private fun StatusPill(text: String, filled: Boolean) {
-    val container = if (filled) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
+    val container =
+        if (filled) MaterialTheme.colorScheme.surfaceVariant
+        else MaterialTheme.colorScheme.surface
     val content = MaterialTheme.colorScheme.onSurfaceVariant
     Surface(
         color = container,

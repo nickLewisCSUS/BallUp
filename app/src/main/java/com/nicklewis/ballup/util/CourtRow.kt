@@ -8,7 +8,8 @@ data class RowRun(
     val playerCount: Int,
     val maxPlayers: Int,
     val playerIds: List<String>?,
-    val hostId: String? = null
+    val hostId: String? = null,
+    val hostUid: String? = null
 )
 data class CourtRow(
     val courtId: String,

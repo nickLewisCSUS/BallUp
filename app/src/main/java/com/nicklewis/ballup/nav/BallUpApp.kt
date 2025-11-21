@@ -32,6 +32,7 @@ import com.nicklewis.ballup.ui.settings.SettingsScreen
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
 import com.nicklewis.ballup.ui.runs.RunDetailsScreen
+import com.nicklewis.ballup.ui.settings.EditProfileScreen
 
 const val ROUTE_RUN = "run/{runId}"
 
@@ -114,11 +115,24 @@ fun BallUpApp(
                         }
                     )
                 }
-                composable(Screen.List.route) { CourtsListScreen() }
 
-                // 🔹 Pass onSignOut down to Settings
+                composable(Screen.List.route) {
+                    CourtsListScreen()
+                }
+
+                // 🔹 Settings screen now supports Edit Profile
                 composable(Screen.Settings.route) {
-                    SettingsScreen(onSignOut = onSignOut)
+                    SettingsScreen(
+                        onEditProfile = { nav.navigate("editProfile") },
+                        onSignOut = onSignOut
+                    )
+                }
+
+                // 🔹 New Edit Profile route
+                composable("editProfile") {
+                    EditProfileScreen(
+                        onBack = { nav.popBackStack() }
+                    )
                 }
 
                 composable(

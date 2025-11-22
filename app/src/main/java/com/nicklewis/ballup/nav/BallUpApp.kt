@@ -33,6 +33,7 @@ import androidx.navigation.NavType
 import androidx.navigation.navArgument
 import com.nicklewis.ballup.ui.runs.RunDetailsScreen
 import com.nicklewis.ballup.ui.settings.EditProfileScreen
+import com.nicklewis.ballup.ui.settings.NotificationSettingsScreen
 
 const val ROUTE_RUN = "run/{runId}"
 
@@ -120,11 +121,11 @@ fun BallUpApp(
                     CourtsListScreen()
                 }
 
-                // 🔹 Settings screen now supports Edit Profile
                 composable(Screen.Settings.route) {
                     SettingsScreen(
                         onEditProfile = { nav.navigate("editProfile") },
-                        onSignOut = onSignOut
+                        onSignOut = onSignOut,
+                        onEditNotifications = { nav.navigate("notificationSettings") }
                     )
                 }
 
@@ -133,6 +134,10 @@ fun BallUpApp(
                     EditProfileScreen(
                         onBack = { nav.popBackStack() }
                     )
+                }
+
+                composable("notificationSettings") {
+                    NotificationSettingsScreen(onBack = { nav.popBackStack() })
                 }
 
                 composable(

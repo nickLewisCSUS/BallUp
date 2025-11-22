@@ -5,6 +5,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -12,6 +16,12 @@ import com.google.firebase.Timestamp
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
+
+// Represents a court option loaded from Firestore
+private data class CourtOption(
+    val id: String,
+    val name: String
+)
 
 @Composable
 fun ProfileSetupScreen(
@@ -51,25 +61,28 @@ fun ProfileSetupScreen(
     )
     var heightBracket by remember { mutableStateOf("Select (optional)") }
 
-    // New: favorite courts
-    var availableCourts by remember { mutableStateOf<List<String>>(emptyList()) }
-    var favoriteCourts by remember { mutableStateOf<List<String>>(emptyList()) }
+    // New: favorite courts (keep both ID + name)
+    var availableCourts by remember { mutableStateOf<List<CourtOption>>(emptyList()) }
+    var favoriteCourtIds by remember { mutableStateOf<List<String>>(emptyList()) }
     var courtsLoading by remember { mutableStateOf(false) }
 
     var isSaving by remember { mutableStateOf(false) }
     var errorText by remember { mutableStateOf<String?>(null) }
 
-    // Load court names from Firestore (optional, best-effort)
+    // Load court names from Firestore (best-effort)
     LaunchedEffect(Unit) {
         courtsLoading = true
         db.collection("courts")
             .get()
             .addOnSuccessListener { snap ->
-                val names = snap.documents
-                    .mapNotNull { it.getString("name") }
-                    .distinct()
-                    .sorted()
-                availableCourts = names
+                val courts = snap.documents
+                    .mapNotNull { doc ->
+                        val name = doc.getString("name") ?: return@mapNotNull null
+                        CourtOption(id = doc.id, name = name)
+                    }
+                    .sortedBy { it.name }
+
+                availableCourts = courts
                 courtsLoading = false
             }
             .addOnFailureListener { e ->
@@ -161,38 +174,36 @@ fun ProfileSetupScreen(
             Spacer(Modifier.height(8.dp))
 
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                availableCourts.forEach { courtName ->
-                    val checked = favoriteCourts.contains(courtName)
+                availableCourts.forEach { court ->
+                    val checked = favoriteCourtIds.contains(court.id)
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.Start
                     ) {
                         Checkbox(
                             checked = checked,
                             onCheckedChange = { isChecked ->
-                                favoriteCourts =
+                                favoriteCourtIds =
                                     if (isChecked) {
-                                        if (favoriteCourts.size >= 3) {
+                                        if (favoriteCourtIds.size >= 3) {
                                             // Ignore extra beyond 3
-                                            favoriteCourts
+                                            favoriteCourtIds
                                         } else {
-                                            favoriteCourts + courtName
+                                            favoriteCourtIds + court.id
                                         }
                                     } else {
-                                        favoriteCourts - courtName
+                                        favoriteCourtIds - court.id
                                     }
                             }
                         )
                         Text(
-                            courtName,
-                            modifier = Modifier
-                                .padding(top = 10.dp)
+                            court.name,
+                            modifier = Modifier.padding(top = 10.dp)
                         )
                     }
                 }
 
-                if (favoriteCourts.size >= 3) {
+                if (favoriteCourtIds.size >= 3) {
                     Text(
                         "You’ve selected the maximum of 3 courts.",
                         style = MaterialTheme.typography.bodySmall,
@@ -218,6 +229,13 @@ fun ProfileSetupScreen(
                 if (!isSaving) {
                     isSaving = true
                     errorText = null
+
+                    // Convert selected IDs to names for storing in user doc
+                    val favIds = favoriteCourtIds
+                    val favNames = availableCourts
+                        .filter { favIds.contains(it.id) }
+                        .map { it.name }
+
                     saveUserProfile(
                         uid = uid,
                         displayName = displayName,
@@ -227,7 +245,8 @@ fun ProfileSetupScreen(
                             .takeIf { it.isNotBlank() && it != "Select (optional)" },
                         heightBracket = heightBracket
                             .takeIf { it.isNotBlank() && it != "Select (optional)" },
-                        favoriteCourts = favoriteCourts,
+                        favoriteCourtIds = favIds,
+                        favoriteCourtNames = favNames,
                         onError = {
                             errorText = it
                             isSaving = false
@@ -384,7 +403,8 @@ private fun saveUserProfile(
     skillLevel: String,
     playStyle: String?,
     heightBracket: String?,
-    favoriteCourts: List<String>,
+    favoriteCourtIds: List<String>,
+    favoriteCourtNames: List<String>,
     onError: (String) -> Unit,
     onSuccess: () -> Unit
 ) {
@@ -424,19 +444,68 @@ private fun saveUserProfile(
             if (!heightBracket.isNullOrBlank()) {
                 profileData["heightBracket"] = heightBracket
             }
-            if (favoriteCourts.isNotEmpty()) {
-                profileData["favoriteCourts"] = favoriteCourts
+            if (favoriteCourtNames.isNotEmpty()) {
+                profileData["favoriteCourts"] = favoriteCourtNames
+            }
+            if (favoriteCourtIds.isNotEmpty()) {
+                profileData["favoriteCourtIds"] = favoriteCourtIds
             }
 
             db.collection("users")
                 .document(uid)
                 .set(profileData, SetOptions.merge()) // merge keeps stars/tokens
-                .addOnSuccessListener { onSuccess() }
+                .addOnSuccessListener {
+                    if (favoriteCourtIds.isNotEmpty()) {
+                        syncFavoriteCourtsToStars(
+                            uid = uid,
+                            courtIds = favoriteCourtIds,
+                            onComplete = onSuccess
+                        )
+                    } else {
+                        onSuccess()
+                    }
+                }
                 .addOnFailureListener { e ->
                     onError("Failed to save profile: ${e.message}")
                 }
         }
         .addOnFailureListener { e ->
             onError("Failed to check username: ${e.message}")
+        }
+}
+
+/**
+ * Sync selected favorite courts to the user's stars subcollection so that
+ * StarsViewModel / CourtCard will show them as starred.
+ *
+ * NOTE: this assumes you store stars under:
+ *   users/{uid}/stars/{courtId}
+ * If your actual path is different, update starsCol below to match.
+ */
+private fun syncFavoriteCourtsToStars(
+    uid: String,
+    courtIds: List<String>,
+    onComplete: () -> Unit
+) {
+    val db = Firebase.firestore
+    val batch = db.batch()
+
+    val starsCol = db.collection("users")
+        .document(uid)
+        .collection("stars")
+
+    courtIds.forEach { courtId ->
+        val docRef = starsCol.document(courtId)
+        batch.set(docRef, mapOf("courtId" to courtId))
+    }
+
+    batch.commit()
+        .addOnSuccessListener {
+            onComplete()
+        }
+        .addOnFailureListener { e ->
+            Log.w("ProfileSetup", "Favorite->star sync failed", e)
+            // Even if stars fail, we still finish profile setup.
+            onComplete()
         }
 }

@@ -221,13 +221,6 @@ fun CourtsMapScreen(
             }
         )
 
-        FloatingActionButton(
-            onClick = { gmap?.let { map -> centerOnLastKnown(map, fused, context) } },
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(16.dp)
-        ) { Icon(Icons.Default.LocationSearching, contentDescription = "My location") }
-
         // Compact "Filters • Closest" button (top-left) with dropdown menu
         Box(
             modifier = Modifier
@@ -303,62 +296,7 @@ fun CourtsMapScreen(
                     onClick = { showStarredOnly = !showStarredOnly }
                 )
 
-                Divider()
 
-                // Sort options (visual only on map)
-                Text(
-                    text = "Sort",
-                    style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                )
-
-                DropdownMenuItem(
-                    text = {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            RadioButton(
-                                selected = sortMode == MapSortMode.CLOSEST,
-                                onClick = null
-                            )
-                            Text("Closest")
-                        }
-                    },
-                    onClick = { sortMode = MapSortMode.CLOSEST }
-                )
-
-                DropdownMenuItem(
-                    text = {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            RadioButton(
-                                selected = sortMode == MapSortMode.MOST_PLAYERS,
-                                onClick = null
-                            )
-                            Text("Most players")
-                        }
-                    },
-                    onClick = { sortMode = MapSortMode.MOST_PLAYERS }
-                )
-
-                DropdownMenuItem(
-                    text = {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            RadioButton(
-                                selected = sortMode == MapSortMode.NEWEST,
-                                onClick = null
-                            )
-                            Text("Newest")
-                        }
-                    },
-                    onClick = { sortMode = MapSortMode.NEWEST }
-                )
             }
         }
     }

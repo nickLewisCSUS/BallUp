@@ -28,7 +28,7 @@ private fun scoreForListing(nowMs: Long, r: Run): Long {
     }
 }
 
-// 🔁 UPDATED: include hostId + hostUid in RowRun
+// UPDATED: include hostId + hostUid in RowRun
 private fun toRowRun(id: String, r: Run) = RowRun(
     id = id,
     name = r.name,

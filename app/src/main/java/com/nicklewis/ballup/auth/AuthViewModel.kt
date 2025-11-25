@@ -9,6 +9,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ktx.toObject
+import com.nicklewis.ballup.data.TokenRepository
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -101,11 +102,21 @@ class AuthViewModel : ViewModel() {
 
                 viewModelScope.launch {
                     if (hasUsername) {
-                        // Returning user: optional small update of display name / photo
                         upsertBasicProfile(user)
+
+                        // SAVE TOKEN HERE
+                        try {
+                            TokenRepository.ensureTokenSaved()
+                        } catch (_: Exception) {}
+
                         _navEvents.emit(AuthNav.ToHome)
                     } else {
-                        // First time OR old user with no profile info yet
+
+                        // SAVE TOKEN HERE TOO
+                        try {
+                            TokenRepository.ensureTokenSaved()
+                        } catch (_: Exception) {}
+
                         _navEvents.emit(
                             AuthNav.ToProfileSetup(
                                 uid = user.uid,

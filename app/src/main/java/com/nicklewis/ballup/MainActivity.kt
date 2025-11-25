@@ -60,10 +60,10 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // ❌ OLD: we auto-signed in anonymously
+        //  OLD: we auto-signed in anonymously
         // signInAnonIfNeeded()
 
-        // ✅ NEW: let Compose decide based on FirebaseAuth currentUser
+        //  NEW: let Compose decide based on FirebaseAuth currentUser
         setContent {
             BallUpAppRoot()
         }
@@ -74,6 +74,11 @@ class MainActivity : ComponentActivity() {
         // (Optional) debug log
         val app = com.google.firebase.FirebaseApp.getInstance()
         Log.d("Firebase", "projectId=${app.options.projectId}, appId=${app.options.applicationId}")
+
+        lifecycleScope.launch {
+            TokenRepository.ensureTokenSaved()
+            resubscribeStarTopics()
+        }
     }
 
     override fun onNewIntent(intent: Intent) {

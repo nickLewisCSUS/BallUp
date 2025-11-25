@@ -8,7 +8,7 @@ import { onSchedule } from "firebase-functions/v2/scheduler";
 admin.initializeApp();
 setGlobalOptions({ region: "us-central1", maxInstances: 1 });
 
-// keep any other exports like cleanupStaleRuns
+// keep any other exports like cleanupStaleRunsF
 export { cleanupStaleRuns, purgeOldFinishedRuns } from "./cleanupRuns";
 
 const db = admin.firestore();
@@ -250,6 +250,13 @@ async function notifyUpcomingWindow(
     .where("startsAt", "<", endTs)
     .get();
 
+  logger.info("notifyUpcomingWindow query", {
+    leadMinutes,
+    windowStartMs,
+    windowEndMs,
+    matchedCount: snap.size,
+  });
+
   if (snap.empty) return;
 
   for (const doc of snap.docs) {
@@ -318,6 +325,8 @@ async function notifyUpcomingWindow(
 
 export const notifyUpcomingRuns = onSchedule("every 5 minutes", async () => {
   const now = Date.now();
+  logger.info("notifyUpcomingRuns tick", { now });
+
   const minute = 60 * 1000;
 
   // 1 hour window: now + 55..65 minutes
@@ -350,6 +359,13 @@ export const notifyRunCancelled = onDocumentUpdated("runs/{runId}", async (event
 
   const prevStatus = before.status as string | undefined;
   const newStatus  = after.status as string | undefined;
+
+  // 🔍 Always log when this trigger fires
+  logger.info("[notifyRunCancelled] trigger", { runId, prevStatus, newStatus });
+
+  // Fire once whenever we *become* cancelled
+  const becameCancelled = newStatus === "cancelled" && prevStatus !== "cancelled";
+  if (!becameCancelled) return;
 
   // Only fire when going from active -> cancelled
   if (prevStatus === newStatus) return;

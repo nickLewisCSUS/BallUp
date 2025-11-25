@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.LocationSearching
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -67,6 +68,9 @@ fun CourtsMapScreen(
     var runs by remember { mutableStateOf(listOf<Pair<String, Run>>()) }
     var error by remember { mutableStateOf<String?>(null) }
 
+    // Cache of uid -> username (or fallback)
+    val userNames = remember { mutableStateMapOf<String, String>() }
+
     val cam: MapCameraVM = viewModel()
     var savedCenter by cam.center
     var savedZoom by cam.zoom
@@ -113,6 +117,33 @@ fun CourtsMapScreen(
                     ?.map { d -> d.id to (d.toObject(Run::class.java) ?: Run()) }
                     .orEmpty()
             }
+    }
+
+    // Whenever runs change, fetch usernames for any hostIds / playerIds we don't know yet
+    LaunchedEffect(runs) {
+        val ids = mutableSetOf<String>()
+        runs.forEach { (_, run) ->
+            run.hostId?.let(ids::add)
+            run.playerIds.orEmpty().forEach(ids::add)
+        }
+
+        ids.forEach { uid ->
+            if (!userNames.containsKey(uid)) {
+                db.collection("users").document(uid).get()
+                    .addOnSuccessListener { snap ->
+                        val name = snap.getString("username")
+                            ?: snap.getString("displayName")
+                            ?: uid.takeLast(6)
+                        userNames[uid] = name
+                    }
+                    .addOnFailureListener { e ->
+                        Log.e("Map", "Failed to load user profile for $uid", e)
+                        if (!userNames.containsKey(uid)) {
+                            userNames[uid] = uid.takeLast(6)
+                        }
+                    }
+            }
+        }
     }
 
     // Map state
@@ -166,7 +197,12 @@ fun CourtsMapScreen(
 
                     if (hasLocationPermission(context)) enableMyLocation(m, context)
                     if (savedCenter != null && savedZoom != null)
-                        m.moveCamera(CameraUpdateFactory.newLatLngZoom(savedCenter!!, savedZoom!!))
+                        m.moveCamera(
+                            CameraUpdateFactory.newLatLngZoom(
+                                savedCenter!!,
+                                savedZoom!!
+                            )
+                        )
                     else if (hasLocationPermission(context))
                         centerOnLastKnown(m, fused, context)
 
@@ -466,9 +502,17 @@ fun CourtsMapScreen(
                                     .padding(12.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
+                                val hostName = currentRun.hostId
+                                    ?.let { userNames[it] }
+                                    ?: "Host"
+
                                 Text(
                                     text = currentRun.mode?.let { "Pickup • $it" } ?: "Pickup run",
                                     style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    text = "Host: $hostName",
+                                    style = MaterialTheme.typography.bodyMedium
                                 )
                                 Text(
                                     text = "Players: ${currentRun.playerCount}/${currentRun.maxPlayers}",
@@ -479,7 +523,8 @@ fun CourtsMapScreen(
                                     currentRun = currentRun,
                                     isHost = (uid != null && currentRun.hostId == uid),
                                     runId = runId,
-                                    uid = uid
+                                    uid = uid,
+                                    userNames = userNames
                                 )
 
                                 Row(
@@ -629,18 +674,20 @@ private fun AttendeeChips(
     currentRun: Run,
     isHost: Boolean,
     runId: String?,
-    uid: String?
+    uid: String?,
+    userNames: Map<String, String>
 ) {
     val scope = rememberCoroutineScope()
     val db = FirebaseFirestore.getInstance()
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         currentRun.playerIds.orEmpty().forEach { pid ->
+            val baseName = userNames[pid] ?: pid.takeLast(6)
+            val labelText =
+                if (pid == currentRun.hostId) "Host • $baseName" else baseName
+
             AssistChip(
                 onClick = {},
-                label = {
-                    val tag = if (pid == currentRun.hostId) "Host • " else ""
-                    Text(tag + pid.takeLast(6))
-                },
+                label = { Text(labelText) },
                 trailingIcon = if (isHost && pid != currentRun.hostId) {
                     {
                         IconButton(
@@ -692,3 +739,4 @@ private fun humanizeCreateRunError(t: Throwable): String {
         else -> "Couldn't start the run. Please adjust the time or try again."
     }
 }
+

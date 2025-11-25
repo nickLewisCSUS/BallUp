@@ -55,7 +55,9 @@ suspend fun joinRun(db: FirebaseFirestore, runId: String, uid: String) {
         val snap = tx.get(ref)
         val run  = snap.toObject(Run::class.java) ?: throw IllegalStateException("Run not found")
 
-        if (run.status != "active") throw IllegalStateException("This run has ended")
+        if (run.status !in listOf("active", "scheduled")) {
+            throw IllegalStateException("This run has ended")
+        }
         val max = run.maxPlayers.takeIf { it > 0 } ?: 10
 
         val current = (run.playerIds ?: emptyList()).toMutableList()
@@ -182,7 +184,9 @@ suspend fun updateMode(db: FirebaseFirestore, runId: String, requesterUid: Strin
         val snap = tx.get(ref)
         val run = snap.toObject(Run::class.java) ?: throw IllegalStateException("Run not found")
         if (run.hostId != requesterUid) throw IllegalStateException("Only host can change mode")
-        if (run.status != "active") throw IllegalStateException("Run not active")
+        if (run.status !in listOf("active", "scheduled")) {
+            throw IllegalStateException("Run not active")
+        }
 
         tx.update(ref, mapOf(
             "mode" to mode,

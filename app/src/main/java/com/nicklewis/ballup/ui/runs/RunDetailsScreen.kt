@@ -192,6 +192,23 @@ fun RunDetailsScreen(
                     val isHost = uid != null && (r.hostId == uid || r.hostUid == uid)
                     val hostUidForSort = r.hostUid ?: r.hostId
 
+                    val nowMs = System.currentTimeMillis()
+                    val sMs = r.startsAt?.toDate()?.time
+                    val eMs = r.endsAt?.toDate()?.time
+
+                    val statusLabel = when {
+                        r.status == "cancelled" -> "Cancelled"
+                        r.status == "inactive" || r.status == "ended" -> "Ended"
+                        sMs != null && eMs != null && nowMs in sMs..eMs -> "Active"
+                        sMs != null && nowMs < sMs -> "Scheduled"
+                        else -> r.status?.replaceFirstChar { it.uppercase() } ?: "Unknown"
+                    }
+
+                    val statusColor = when (statusLabel) {
+                        "Cancelled", "Ended" -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+
                     // Header card
                     Surface(
                         tonalElevation = 2.dp,
@@ -229,26 +246,18 @@ fun RunDetailsScreen(
                             )
 
                             Text(
-                                text = "Status • " + when (r.status) {
-                                    "active" -> "Active"
-                                    "cancelled" -> "Cancelled"
-                                    "inactive" -> "Inactive"
-                                    else -> r.status ?: "Unknown"
-                                },
+                                text = "Status • $statusLabel",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (r.status != "active")
-                                    MaterialTheme.colorScheme.error
-                                else
-                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                color = statusColor
                             )
 
-                            if (open > 0 && r.status == "active") {
+                            if (open > 0 && statusLabel in listOf("Active", "Scheduled")) {
                                 Text(
                                     "$open spot${if (open == 1) "" else "s"} left",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.primary
                                 )
-                            } else if (r.status == "active") {
+                            } else if (statusLabel in listOf("Active", "Scheduled")) {
                                 Text(
                                     "Full",
                                     style = MaterialTheme.typography.bodySmall,
@@ -259,7 +268,7 @@ fun RunDetailsScreen(
                     }
 
                     // Notice when run is ended/cancelled
-                    if (r.status != "active") {
+                    if (statusLabel in listOf("Cancelled", "Ended")) {
                         Text(
                             text = "This run has ended and is no longer joinable.",
                             style = MaterialTheme.typography.bodySmall,
@@ -354,7 +363,8 @@ fun RunDetailsScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         if (!isMember) {
-                            val canJoin = r.status == "active" && open > 0 && uid != null
+                            val canJoin =
+                                statusLabel in listOf("Active", "Scheduled") && open > 0 && uid != null
                             Button(
                                 onClick = {
                                     if (!canJoin) return@Button
@@ -379,11 +389,11 @@ fun RunDetailsScreen(
                         } else if (isHost) {
                             OutlinedButton(
                                 onClick = {
-                                    if (!ending && r.status == "active") {
+                                    if (!ending && statusLabel in listOf("Active", "Scheduled")) {
                                         showCancelConfirm = true
                                     }
                                 },
-                                enabled = !ending && r.status == "active",
+                                enabled = !ending && statusLabel in listOf("Active", "Scheduled"),
                                 modifier = Modifier
                                     .weight(1f)
                                     .heightIn(min = 44.dp)
@@ -636,7 +646,20 @@ private fun EditRunSheet(
     var start by remember { mutableStateOf(tsToLocal(run.startsAt)) }
     var end by remember { mutableStateOf(tsToLocal(run.endsAt)) }
 
-    val active = run.status == "active"
+    // Has this run actually started yet? (based on time window)
+    val hasStarted by remember(run.startsAt) {
+        mutableStateOf(
+            run.startsAt?.toDate()
+                ?.toInstant()
+                ?.atZone(ZoneId.systemDefault())
+                ?.toLocalDateTime()
+                ?.let { it.isBefore(LocalDateTime.now()) || it.isEqual(LocalDateTime.now()) }
+                ?: false
+        )
+    }
+
+    // “Active” here really just means not cancelled/ended
+    val active = run.status == "active" || run.status == "scheduled"
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -695,10 +718,10 @@ private fun EditRunSheet(
 
             Text("Start time", style = MaterialTheme.typography.labelLarge)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { start = start.minusHours(1) }, enabled = !active) {
+                OutlinedButton(onClick = { start = start.minusHours(1) }, enabled = !hasStarted) {
                     Text("−1h")
                 }
-                OutlinedButton(onClick = { start = start.plusHours(1) }, enabled = !active) {
+                OutlinedButton(onClick = { start = start.plusHours(1) }, enabled = !hasStarted) {
                     Text("+1h")
                 }
                 Text(
@@ -742,7 +765,7 @@ private fun EditRunSheet(
                             ),
                             "lastHeartbeatAt" to FieldValue.serverTimestamp()
                         )
-                        if (!active) {
+                        if (!hasStarted) {
                             patch["startsAt"] = com.google.firebase.Timestamp(
                                 java.util.Date.from(
                                     start.atZone(ZoneId.systemDefault()).toInstant()
@@ -757,9 +780,9 @@ private fun EditRunSheet(
             }
 
             Spacer(Modifier.height(8.dp))
-            if (active) {
+            if (hasStarted) {
                 Text(
-                    "Start time locked because the run is active.",
+                    "Start time locked because the run has already started.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -767,5 +790,4 @@ private fun EditRunSheet(
         }
     }
 }
-
 

@@ -86,9 +86,12 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-process:2.8.7")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
+
     // TimePicker is in Material3 1.2.x+
     implementation("androidx.compose.material3:material3:1.2.1")
     implementation(libs.foundation)
+    implementation(libs.ui)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

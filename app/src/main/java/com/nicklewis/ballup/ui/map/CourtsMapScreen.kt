@@ -13,11 +13,12 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.LocationSearching
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -37,6 +38,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.ktx.toObject
+import com.nicklewis.ballup.data.CourtLite
 import com.nicklewis.ballup.firebase.joinRun
 import com.nicklewis.ballup.firebase.leaveRun
 import com.nicklewis.ballup.map.MapCameraVM
@@ -52,8 +54,6 @@ import com.nicklewis.ballup.vm.StarsViewModel
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.ZoneId
-
-private enum class MapSortMode { CLOSEST, MOST_PLAYERS, NEWEST }
 
 @Composable
 fun CourtsMapScreen(
@@ -84,8 +84,7 @@ fun CourtsMapScreen(
     val starredIds by starsVm.starred.collectAsState()
     var showStarredOnly by rememberSaveable { mutableStateOf(false) }
 
-    // Filter dropdown state (map-only; sort is just for label here)
-    var sortMode by rememberSaveable { mutableStateOf(MapSortMode.CLOSEST) }
+    // Filter dropdown state
     var filtersExpanded by remember { mutableStateOf(false) }
 
     var showCreate by remember { mutableStateOf<String?>(null) }
@@ -187,6 +186,7 @@ fun CourtsMapScreen(
                 MapsInitializer.initialize(it)
                 mapView.getMapAsync { m ->
                     m.uiSettings.isZoomControlsEnabled = true
+                    m.uiSettings.isMyLocationButtonEnabled = true
                     gmap = m
 
                     m.setOnMarkerClickListener { marker ->
@@ -221,24 +221,18 @@ fun CourtsMapScreen(
             }
         )
 
-        // Compact "Filters • Closest" button (top-left) with dropdown menu
+        // Compact "Filters" button (top-left) with dropdown menu
         Box(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(start = 12.dp, top = 12.dp)
         ) {
-            val sortLabel = when (sortMode) {
-                MapSortMode.CLOSEST -> "Closest"
-                MapSortMode.MOST_PLAYERS -> "Most players"
-                MapSortMode.NEWEST -> "Newest"
-            }
-
             FilledTonalButton(
                 onClick = { filtersExpanded = true },
                 shape = MaterialTheme.shapes.large,
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
             ) {
-                Text(text = "Filters • $sortLabel")
+                Text(text = "Filters")
             }
 
             DropdownMenu(
@@ -295,8 +289,6 @@ fun CourtsMapScreen(
                     },
                     onClick = { showStarredOnly = !showStarredOnly }
                 )
-
-
             }
         }
     }
@@ -397,6 +389,8 @@ fun CourtsMapScreen(
             runDate == today
         }
 
+        val isStarred = courtId in starredIds
+
         ModalBottomSheet(
             onDismissRequest = { selected = null },
             dragHandle = { BottomSheetDefaults.DragHandle() }
@@ -408,7 +402,44 @@ fun CourtsMapScreen(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(court.name.orEmpty(), style = MaterialTheme.typography.titleLarge)
+                // Header row: court name + star button
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        court.name.orEmpty(),
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    IconButton(
+                        onClick = {
+                            val lat = court.geo?.lat ?: 0.0
+                            val lng = court.geo?.lng ?: 0.0
+
+                            val courtLite = CourtLite(
+                                id = courtId,
+                                name = court.name.orEmpty(),
+                                lat = lat,
+                                lng = lng
+                            )
+
+                            starsVm.toggle(
+                                court = courtLite,
+                                star = !isStarred,
+                                runAlertsEnabled = false
+                            )
+                        }
+                    ) {
+                        Icon(
+                            imageVector = if (isStarred) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                            contentDescription = if (isStarred) "Unfavorite court" else "Favorite court"
+                        )
+                    }
+                }
+
                 Text(court.address.orEmpty(), style = MaterialTheme.typography.bodyMedium)
                 Text(
                     listOfNotNull(
@@ -677,4 +708,3 @@ private fun humanizeCreateRunError(t: Throwable): String {
         else -> "Couldn't start the run. Please adjust the time or try again."
     }
 }
-

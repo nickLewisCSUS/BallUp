@@ -211,19 +211,29 @@ fun CourtsMapScreen(
             }
         }
 
+        val nowMs = System.currentTimeMillis()
         val points = mutableListOf<LatLng>()
+
         filtered.forEach { (id, c) ->
             val lat = c.geo?.lat; val lng = c.geo?.lng
             if (lat != null && lng != null) {
                 val p = LatLng(lat, lng)
-                val hasActive = runs.any { it.second.courtId == id && it.second.status == "active" }
+
+                val hasLiveRun = runs.any { (_, run) ->
+                    if (run.courtId != id || run.status != "active") return@any false
+
+                    val startMs = run.startsAt?.toDate()?.time ?: return@any false
+                    val endMs = run.endsAt?.toDate()?.time ?: startMs
+
+                    nowMs in startMs..endMs
+                }
 
                 val opts = MarkerOptions()
                     .position(p)
                     .title(c.name.orEmpty())
                     .snippet("${c.type.orEmpty()} • ${c.address.orEmpty()}")
 
-                if (hasActive) {
+                if (hasLiveRun) {
                     opts.icon(
                         com.google.android.gms.maps.model.BitmapDescriptorFactory.defaultMarker(
                             com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_GREEN

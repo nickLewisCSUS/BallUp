@@ -47,9 +47,12 @@ import com.nicklewis.ballup.util.centerOnLastKnown
 import com.nicklewis.ballup.util.enableMyLocation
 import com.nicklewis.ballup.util.hasLocationPermission
 import com.nicklewis.ballup.util.openDirections
+import com.nicklewis.ballup.vm.StarsViewModel
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.ZoneId
+
+private enum class MapSortMode { CLOSEST, MOST_PLAYERS, NEWEST }
 
 @Composable
 fun CourtsMapScreen(
@@ -71,6 +74,16 @@ fun CourtsMapScreen(
     var didAutoFit by rememberSaveable { mutableStateOf(false) }
 
     val runsViewModel: RunsViewModel = viewModel()
+
+    // Stars / favorites
+    val starsVm: StarsViewModel = viewModel()
+    val starredIds by starsVm.starred.collectAsState()
+    var showStarredOnly by rememberSaveable { mutableStateOf(false) }
+
+    // Filter dropdown state (map-only; sort is just for label here)
+    var sortMode by rememberSaveable { mutableStateOf(MapSortMode.CLOSEST) }
+    var filtersExpanded by remember { mutableStateOf(false) }
+
     var showCreate by remember { mutableStateOf<String?>(null) }
     var dialogError by remember { mutableStateOf<String?>(null) }
 
@@ -79,7 +92,10 @@ fun CourtsMapScreen(
         db.collection("courts")
             .orderBy("name", Query.Direction.ASCENDING)
             .addSnapshotListener { snap, e ->
-                if (e != null) { error = e.message; return@addSnapshotListener }
+                if (e != null) {
+                    error = e.message
+                    return@addSnapshotListener
+                }
                 courts = snap?.documents
                     ?.map { d -> d.id to (d.toObject<Court>() ?: Court()) }
                     .orEmpty()
@@ -89,7 +105,10 @@ fun CourtsMapScreen(
         db.collection("runs")
             .whereEqualTo("status", "active")
             .addSnapshotListener { snap, e ->
-                if (e != null) { error = e.message; return@addSnapshotListener }
+                if (e != null) {
+                    error = e.message
+                    return@addSnapshotListener
+                }
                 runs = snap?.documents
                     ?.map { d -> d.id to (d.toObject(Run::class.java) ?: Run()) }
                     .orEmpty()
@@ -173,37 +192,148 @@ fun CourtsMapScreen(
                 .padding(16.dp)
         ) { Icon(Icons.Default.LocationSearching, contentDescription = "My location") }
 
-        Surface(
-            tonalElevation = 2.dp,
-            shape = MaterialTheme.shapes.large,
+        // Compact "Filters • Closest" button (top-left) with dropdown menu
+        Box(
             modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(12.dp)
+                .align(Alignment.TopStart)
+                .padding(start = 12.dp, top = 12.dp)
         ) {
-            Row(
-                Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            val sortLabel = when (sortMode) {
+                MapSortMode.CLOSEST -> "Closest"
+                MapSortMode.MOST_PLAYERS -> "Most players"
+                MapSortMode.NEWEST -> "Newest"
+            }
+
+            FilledTonalButton(
+                onClick = { filtersExpanded = true },
+                shape = MaterialTheme.shapes.large,
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
             ) {
-                FilterChip(
-                    selected = showIndoor,
-                    onClick = onToggleIndoor,
-                    label = { Text("Indoor") }
+                Text(text = "Filters • $sortLabel")
+            }
+
+            DropdownMenu(
+                expanded = filtersExpanded,
+                onDismissRequest = { filtersExpanded = false }
+            ) {
+                // Indoor
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Checkbox(
+                                checked = showIndoor,
+                                onCheckedChange = null
+                            )
+                            Text("Indoor courts")
+                        }
+                    },
+                    onClick = { onToggleIndoor() }
                 )
-                FilterChip(
-                    selected = showOutdoor,
-                    onClick = onToggleOutdoor,
-                    label = { Text("Outdoor") }
+
+                // Outdoor
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Checkbox(
+                                checked = showOutdoor,
+                                onCheckedChange = null
+                            )
+                            Text("Outdoor courts")
+                        }
+                    },
+                    onClick = { onToggleOutdoor() }
+                )
+
+                // Starred only
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Checkbox(
+                                checked = showStarredOnly,
+                                onCheckedChange = null
+                            )
+                            Text("Starred courts only")
+                        }
+                    },
+                    onClick = { showStarredOnly = !showStarredOnly }
+                )
+
+                Divider()
+
+                // Sort options (visual only on map)
+                Text(
+                    text = "Sort",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                )
+
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            RadioButton(
+                                selected = sortMode == MapSortMode.CLOSEST,
+                                onClick = null
+                            )
+                            Text("Closest")
+                        }
+                    },
+                    onClick = { sortMode = MapSortMode.CLOSEST }
+                )
+
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            RadioButton(
+                                selected = sortMode == MapSortMode.MOST_PLAYERS,
+                                onClick = null
+                            )
+                            Text("Most players")
+                        }
+                    },
+                    onClick = { sortMode = MapSortMode.MOST_PLAYERS }
+                )
+
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            RadioButton(
+                                selected = sortMode == MapSortMode.NEWEST,
+                                onClick = null
+                            )
+                            Text("Newest")
+                        }
+                    },
+                    onClick = { sortMode = MapSortMode.NEWEST }
                 )
             }
         }
     }
 
     // Markers + fit
-    LaunchedEffect(gmap, courts, runs, showIndoor, showOutdoor) {
+    LaunchedEffect(gmap, courts, runs, showIndoor, showOutdoor, showStarredOnly, starredIds) {
         val map = gmap ?: return@LaunchedEffect
         map.clear()
 
-        val filtered = courts.filter { (_, c) ->
+        // Filter by indoor/outdoor
+        val base = courts.filter { (_, c) ->
             when (c.type?.trim()?.lowercase()) {
                 "indoor" -> showIndoor
                 "outdoor" -> showOutdoor
@@ -211,11 +341,19 @@ fun CourtsMapScreen(
             }
         }
 
+        // Optional: starred only
+        val filtered = if (!showStarredOnly) {
+            base
+        } else {
+            base.filter { (id, _) -> id in starredIds }
+        }
+
         val nowMs = System.currentTimeMillis()
         val points = mutableListOf<LatLng>()
 
         filtered.forEach { (id, c) ->
-            val lat = c.geo?.lat; val lng = c.geo?.lng
+            val lat = c.geo?.lat
+            val lng = c.geo?.lng
             if (lat != null && lng != null) {
                 val p = LatLng(lat, lng)
 
@@ -357,8 +495,11 @@ fun CourtsMapScreen(
                                             onClick = {
                                                 if (uid != null) {
                                                     scope.launch {
-                                                        try { joinRun(db, runId, uid) }
-                                                        catch (e: Exception) { Log.e("JOIN", "Failed", e) }
+                                                        try {
+                                                            joinRun(db, runId, uid)
+                                                        } catch (e: Exception) {
+                                                            Log.e("JOIN", "Failed", e)
+                                                        }
                                                     }
                                                 }
                                             },
@@ -370,8 +511,11 @@ fun CourtsMapScreen(
                                             onClick = {
                                                 if (uid != null) {
                                                     scope.launch {
-                                                        try { leaveRun(db, runId, uid) }
-                                                        catch (e: Exception) { Log.e("LEAVE", "Failed", e) }
+                                                        try {
+                                                            leaveRun(db, runId, uid)
+                                                        } catch (e: Exception) {
+                                                            Log.e("LEAVE", "Failed", e)
+                                                        }
                                                     }
                                                 }
                                             },
@@ -394,7 +538,7 @@ fun CourtsMapScreen(
                     Spacer(Modifier.height(12.dp))
                 }
 
-                // Always show Start run + Directions row (even if there are runs today)
+                // Always show Start run + Directions row
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button(
                         onClick = {
@@ -504,8 +648,15 @@ private fun AttendeeChips(
                                 if (runId != null && uid != null) {
                                     scope.launch {
                                         try {
-                                            com.nicklewis.ballup.firebase.kickPlayer(db, runId, uid, pid)
-                                        } catch (e: Exception) { Log.e("RUN", "kick", e) }
+                                            com.nicklewis.ballup.firebase.kickPlayer(
+                                                db,
+                                                runId,
+                                                uid,
+                                                pid
+                                            )
+                                        } catch (e: Exception) {
+                                            Log.e("RUN", "kick", e)
+                                        }
                                     }
                                 }
                             }

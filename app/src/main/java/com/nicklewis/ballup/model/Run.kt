@@ -15,5 +15,8 @@ data class Run(
     var playerCount: Int = 0,
     var playerIds: List<String>? = emptyList(),
     var createdAt: Timestamp? = null,
-    var name: String = ""
+    var name: String = "",
+    val access: String = RunAccess.OPEN.name,
+    val allowedUids: List<String> = emptyList(),
+    val pendingJoinsCount: Int = 0,
 )

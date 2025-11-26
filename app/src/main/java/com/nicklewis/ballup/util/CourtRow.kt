@@ -1,4 +1,5 @@
 package com.nicklewis.ballup.util
+import com.nicklewis.ballup.model.RunAccess
 
 data class RowRun(
     val id: String,
@@ -7,9 +8,11 @@ data class RowRun(
     val endsAt: com.google.firebase.Timestamp?,
     val playerCount: Int,
     val maxPlayers: Int,
-    val playerIds: List<String>?,
+    val playerIds: List<String>,
     val hostId: String? = null,
-    val hostUid: String? = null
+    val hostUid: String? = null,
+    val access: String = RunAccess.OPEN.name,
+    val allowedUids: List<String> = emptyList(),
 )
 data class CourtRow(
     val courtId: String,

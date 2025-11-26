@@ -147,11 +147,6 @@ fun BallUpApp(
                     val runId = backStackEntry.arguments?.getString("runId")!!
                     RunDetailsScreen(runId = runId, onBack = { nav.popBackStack() })
                 }
-
-                composable("court/{courtId}/runs") { backStack ->
-                    val courtId = backStack.arguments?.getString("courtId") ?: return@composable
-                    com.nicklewis.ballup.ui.courts.CourtRunsScreen(courtId = courtId)
-                }
             }
             InAppAlertsOverlay(nav)
         }

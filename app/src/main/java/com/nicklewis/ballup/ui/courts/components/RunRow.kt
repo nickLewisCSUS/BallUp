@@ -7,6 +7,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.nicklewis.ballup.model.RunAccess
 import com.nicklewis.ballup.util.RowRun
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -17,6 +18,7 @@ fun RunRow(
     currentUid: String?,
     onView: () -> Unit,
     onJoin: () -> Unit,
+    onRequestJoin: () -> Unit,
     onLeave: () -> Unit
 ) {
     val zone = ZoneId.systemDefault()
@@ -30,11 +32,15 @@ fun RunRow(
         else -> ""
     }
 
-    val open = (rr.maxPlayers - rr.playerCount).coerceAtLeast(0)
-    val status = when {
-        open > 0 -> "Open"
-        rr.playerCount >= rr.maxPlayers -> "Full"
-        else -> "Active"
+    val openSlots = (rr.maxPlayers - rr.playerCount).coerceAtLeast(0)
+
+    // --- Decode access safely into enum ---
+    val runAccess: RunAccess = remember(rr.access) {
+        try {
+            RunAccess.valueOf(rr.access)
+        } catch (e: IllegalArgumentException) {
+            RunAccess.OPEN
+        }
     }
 
     val isJoined = currentUid != null && rr.playerIds?.contains(currentUid) == true
@@ -47,6 +53,19 @@ fun RunRow(
 
     // Host is allowed to leave only if more than 1 player exists
     val hostCanLeave = isHost && rr.playerCount > 1
+
+    // For invite-only runs, check if the user is on the allow list
+    val isAllowedForInviteOnly =
+        currentUid != null && rr.allowedUids.contains(currentUid)
+
+    // Status pill text
+    val status = when {
+        runAccess == RunAccess.INVITE_ONLY && openSlots > 0 -> "Invite only"
+        runAccess == RunAccess.HOST_APPROVAL && openSlots > 0 -> "Needs approval"
+        openSlots > 0 -> "Open"
+        rr.playerCount >= rr.maxPlayers -> "Full"
+        else -> "Active"
+    }
 
     var showLeaveConfirm by remember { mutableStateOf(false) }
 
@@ -96,13 +115,49 @@ fun RunRow(
                 }
 
                 when {
+                    // --- Not joined yet: button depends on access ---
                     !isJoined -> {
-                        FilledTonalButton(
-                            onClick = onJoin,
-                            shape = MaterialTheme.shapes.medium,
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
-                        ) {
-                            Text("Join", style = MaterialTheme.typography.labelLarge)
+                        when (runAccess) {
+                            RunAccess.OPEN -> {
+                                FilledTonalButton(
+                                    onClick = onJoin,
+                                    shape = MaterialTheme.shapes.medium,
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                ) {
+                                    Text("Join", style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
+
+                            RunAccess.HOST_APPROVAL -> {
+                                FilledTonalButton(
+                                    onClick = onRequestJoin,
+                                    shape = MaterialTheme.shapes.medium,
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                ) {
+                                    Text("Request", style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
+
+                            RunAccess.INVITE_ONLY -> {
+                                if (isAllowedForInviteOnly) {
+                                    FilledTonalButton(
+                                        onClick = onJoin,
+                                        shape = MaterialTheme.shapes.medium,
+                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                    ) {
+                                        Text("Join", style = MaterialTheme.typography.labelLarge)
+                                    }
+                                } else {
+                                    FilledTonalButton(
+                                        onClick = { /* no-op */ },
+                                        enabled = false,
+                                        shape = MaterialTheme.shapes.medium,
+                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                    ) {
+                                        Text("Invite only", style = MaterialTheme.typography.labelLarge)
+                                    }
+                                }
+                            }
                         }
                     }
 

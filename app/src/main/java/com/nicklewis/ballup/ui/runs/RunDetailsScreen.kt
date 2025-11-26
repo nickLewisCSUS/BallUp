@@ -23,6 +23,8 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.nicklewis.ballup.firebase.joinRun
 import com.nicklewis.ballup.firebase.leaveRun
+import com.nicklewis.ballup.firebase.requestJoinRun
+import com.nicklewis.ballup.model.RunAccess
 import com.nicklewis.ballup.util.openDirections
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -49,11 +51,19 @@ fun RunDetailsScreen(
     var run by remember { mutableStateOf<RunDoc?>(null) }
     var courtName by remember { mutableStateOf<String?>(null) }
     var isMember by remember { mutableStateOf(false) }
+    var isHost by remember { mutableStateOf(false) }
     var showEdit by remember { mutableStateOf(false) }
 
     // Host + players profile info
     var hostProfile by remember { mutableStateOf<PlayerProfile?>(null) }
     var playerProfiles by remember { mutableStateOf<Map<String, PlayerProfile>>(emptyMap()) }
+
+    // ----- pending join requests -----
+    var pendingRequests by remember { mutableStateOf<List<JoinRequestDoc>>(emptyList()) }
+    var pendingProfiles by remember { mutableStateOf<Map<String, PlayerProfile>>(emptyMap()) }
+
+    // current viewer's join request status (pending/approved/denied)
+    var myRequestStatus by remember { mutableStateOf<String?>(null) }
 
     // ----- listen to run -----
     DisposableEffect(runId) {
@@ -79,6 +89,57 @@ fun RunDetailsScreen(
         onDispose { reg?.remove() }
     }
 
+    // ----- listen to pending join requests (host only) -----
+    DisposableEffect(run?.ref, isHost) {
+        val r = run
+        if (!isHost || r == null) {
+            onDispose { }
+        } else {
+            val subQuery = r.ref.collection("joinRequests")
+                .whereEqualTo("status", "pending")
+
+            val reg = subQuery.addSnapshotListener { snap, e ->
+                if (e != null) {
+                    Log.e("RunDetails", "joinRequests listen error", e)
+                    return@addSnapshotListener
+                }
+                val list = snap?.documents.orEmpty().mapNotNull { doc ->
+                    val data = doc.data ?: return@mapNotNull null
+                    JoinRequestDoc.from(data, doc.reference)
+                }
+                pendingRequests = list
+            }
+
+            onDispose { reg.remove() }
+        }
+    }
+
+    // ----- listen to *my* join request (any viewer) -----
+    DisposableEffect(run?.ref, uid) {
+        val r = run
+        val me = uid
+        if (r == null || me == null) {
+            myRequestStatus = null
+            onDispose { }
+        } else {
+            val docRef = r.ref.collection("joinRequests").document(me)
+            val reg = docRef.addSnapshotListener { snap, e ->
+                if (e != null) {
+                    Log.e("RunDetails", "my joinRequest listen error", e)
+                    myRequestStatus = null
+                    return@addSnapshotListener
+                }
+                if (snap != null && snap.exists()) {
+                    val data = snap.data ?: emptyMap()
+                    myRequestStatus = data["status"] as? String ?: "pending"
+                } else {
+                    myRequestStatus = null
+                }
+            }
+            onDispose { reg.remove() }
+        }
+    }
+
     // ----- fetch court meta -----
     LaunchedEffect(run?.courtId) {
         val cid = run?.courtId ?: return@LaunchedEffect
@@ -99,17 +160,19 @@ fun RunDetailsScreen(
         }
     }
 
-    // ----- membership -----
+    // ----- membership + host flag -----
     LaunchedEffect(run, uid) {
         val r = run ?: return@LaunchedEffect
         val me = uid
+        val hostUidForSort = r.hostUid ?: r.hostId
+
         isMember = when {
             me == null -> false
-            r.hostId == me -> true
-            r.hostUid == me -> true
+            r.hostId == me || r.hostUid == me -> true
             r.playerIds.contains(me) -> true
             else -> false
         }
+        isHost = (me != null && (r.hostId == me || r.hostUid == me))
     }
 
     // ----- host profile lookup -----
@@ -140,6 +203,24 @@ fun RunDetailsScreen(
             }
         }
         playerProfiles = map
+    }
+
+    // ----- pending profiles lookup -----
+    LaunchedEffect(pendingRequests.map { it.uid }.sorted().joinToString(",")) {
+        val ids = pendingRequests.map { it.uid }.distinct()
+        if (ids.isEmpty()) {
+            pendingProfiles = emptyMap()
+            return@LaunchedEffect
+        }
+
+        val map = mutableMapOf<String, PlayerProfile>()
+        for (id in ids) {
+            val profile = lookupUserProfile(db, id)
+            if (profile != null) {
+                map[id] = profile
+            }
+        }
+        pendingProfiles = map
     }
 
     // ----- UI -----
@@ -187,10 +268,9 @@ fun RunDetailsScreen(
 
                 else -> {
                     val r = run!!
-                    val open = (r.maxPlayers - r.playerCount).coerceAtLeast(0)
                     val ctx = LocalContext.current
-                    val isHost = uid != null && (r.hostId == uid || r.hostUid == uid)
                     val hostUidForSort = r.hostUid ?: r.hostId
+                    val openSlots = (r.maxPlayers - r.playerCount).coerceAtLeast(0)
 
                     val nowMs = System.currentTimeMillis()
                     val sMs = r.startsAt?.toDate()?.time
@@ -208,6 +288,18 @@ fun RunDetailsScreen(
                         "Cancelled", "Ended" -> MaterialTheme.colorScheme.error
                         else -> MaterialTheme.colorScheme.onSurfaceVariant
                     }
+
+                    // Decode access
+                    val accessEnum: RunAccess = remember(r.access) {
+                        try {
+                            RunAccess.valueOf(r.access)
+                        } catch (_: IllegalArgumentException) {
+                            RunAccess.OPEN
+                        }
+                    }
+                    val isAllowedForInviteOnly =
+                        uid != null && r.allowedUids.contains(uid)
+                    val hasPendingRequestFromMe = (myRequestStatus == "pending")
 
                     // Header card
                     Surface(
@@ -244,6 +336,22 @@ fun RunDetailsScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            Text(
+                                text = "Access • " + when (accessEnum) {
+                                    RunAccess.OPEN -> "Open to anyone"
+                                    RunAccess.HOST_APPROVAL -> "Host approval required"
+                                    RunAccess.INVITE_ONLY -> "Invite only"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (r.pendingJoinsCount > 0 && isHost) {
+                                Text(
+                                    text = "Pending requests • ${r.pendingJoinsCount}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
 
                             Text(
                                 text = "Status • $statusLabel",
@@ -251,9 +359,9 @@ fun RunDetailsScreen(
                                 color = statusColor
                             )
 
-                            if (open > 0 && statusLabel in listOf("Active", "Scheduled")) {
+                            if (openSlots > 0 && statusLabel in listOf("Active", "Scheduled")) {
                                 Text(
-                                    "$open spot${if (open == 1) "" else "s"} left",
+                                    "$openSlots spot${if (openSlots == 1) "" else "s"} left",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -276,7 +384,7 @@ fun RunDetailsScreen(
                         )
                     }
 
-                    // Players list card – cleaner tags layout
+                    // Players list card
                     if (r.playerIds.isNotEmpty()) {
                         Text("Players", style = MaterialTheme.typography.titleMedium)
                         Surface(
@@ -322,7 +430,6 @@ fun RunDetailsScreen(
                                             }
                                         }
 
-                                        // Compact tags line: skill • playstyle • height
                                         val tagPieces = listOfNotNull(
                                             profile?.skillLevel,
                                             profile?.playStyle,
@@ -336,7 +443,6 @@ fun RunDetailsScreen(
                                             )
                                         }
 
-                                        // Favorite courts
                                         val fav = profile?.favoriteCourts
                                         if (fav != null && fav.isNotEmpty()) {
                                             Text(
@@ -351,8 +457,179 @@ fun RunDetailsScreen(
                         }
                     }
 
+                    // --- Pending join requests (host only) ---
+                    if (isHost) {
+                        Text("Pending requests", style = MaterialTheme.typography.titleMedium)
+                        Surface(
+                            tonalElevation = 1.dp,
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            if (pendingRequests.isEmpty()) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp)
+                                ) {
+                                    Text(
+                                        text = "No pending join requests.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            } else {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    pendingRequests
+                                        .sortedBy { it.createdAt?.toDate()?.time ?: Long.MAX_VALUE }
+                                        .forEach { req ->
+                                            val profile = pendingProfiles[req.uid]
+                                            var rowBusy by remember(req.uid) { mutableStateOf(false) }
+
+                                            Column(
+                                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    modifier = Modifier.fillMaxWidth()
+                                                ) {
+                                                    Column(
+                                                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                                                        modifier = Modifier.weight(1f)
+                                                    ) {
+                                                        Text(
+                                                            text = profile?.username ?: req.uid,
+                                                            style = MaterialTheme.typography.bodyMedium,
+                                                            fontWeight = FontWeight.SemiBold
+                                                        )
+                                                        val tags = listOfNotNull(
+                                                            profile?.skillLevel,
+                                                            profile?.playStyle,
+                                                            profile?.heightBracket
+                                                        )
+                                                        if (tags.isNotEmpty()) {
+                                                            Text(
+                                                                text = tags.joinToString(" • "),
+                                                                style = MaterialTheme.typography.bodySmall,
+                                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                            )
+                                                        }
+                                                    }
+
+                                                    Row(
+                                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        TextButton(
+                                                            enabled = !rowBusy,
+                                                            onClick = {
+                                                                if (rowBusy || uid == null) return@TextButton
+                                                                rowBusy = true
+                                                                scope.launch {
+                                                                    try {
+                                                                        val runRef = db.collection("runs").document(runId)
+                                                                        val reqRef = req.ref
+
+                                                                        try {
+                                                                            // Try to actually join the run
+                                                                            joinRun(db, runId, req.uid)
+
+                                                                            // Mark approved + decrement pending count
+                                                                            db.runBatch { batch ->
+                                                                                batch.update(
+                                                                                    runRef,
+                                                                                    mapOf(
+                                                                                        "pendingJoinsCount" to FieldValue.increment(-1)
+                                                                                    )
+                                                                                )
+                                                                                batch.update(
+                                                                                    reqRef,
+                                                                                    mapOf(
+                                                                                        "status" to "approved",
+                                                                                        "approvedAt" to FieldValue.serverTimestamp()
+                                                                                    )
+                                                                                )
+                                                                            }.await()
+                                                                        } catch (e: Exception) {
+                                                                            Log.e("RunDetails", "approveJoin failed", e)
+                                                                            // Best-effort: mark as denied/decided so it doesn't get stuck forever
+                                                                            try {
+                                                                                db.runBatch { batch ->
+                                                                                    batch.update(
+                                                                                        runRef,
+                                                                                        mapOf(
+                                                                                            "pendingJoinsCount" to FieldValue.increment(-1)
+                                                                                        )
+                                                                                    )
+                                                                                    batch.update(
+                                                                                        reqRef,
+                                                                                        mapOf(
+                                                                                            "status" to "denied",
+                                                                                            "decidedAt" to FieldValue.serverTimestamp()
+                                                                                        )
+                                                                                    )
+                                                                                }.await()
+                                                                            } catch (inner: Exception) {
+                                                                                Log.e("RunDetails", "cleanup after approve failure", inner)
+                                                                            }
+                                                                        }
+                                                                    } finally {
+                                                                        rowBusy = false
+                                                                    }
+                                                                }
+                                                            }
+                                                        ) {
+                                                            Text("Approve")
+                                                        }
+
+                                                        TextButton(
+                                                            enabled = !rowBusy,
+                                                            onClick = {
+                                                                if (rowBusy || uid == null) return@TextButton
+                                                                rowBusy = true
+                                                                scope.launch {
+                                                                    try {
+                                                                        val runRef = db.collection("runs").document(runId)
+                                                                        val reqRef = req.ref
+                                                                        db.runBatch { batch ->
+                                                                            batch.update(
+                                                                                runRef,
+                                                                                mapOf(
+                                                                                    "pendingJoinsCount" to FieldValue.increment(-1)
+                                                                                )
+                                                                            )
+                                                                            batch.update(
+                                                                                reqRef,
+                                                                                mapOf(
+                                                                                    "status" to "denied",
+                                                                                    "decidedAt" to FieldValue.serverTimestamp()
+                                                                                )
+                                                                            )
+                                                                        }.await()
+                                                                    } catch (e: Exception) {
+                                                                        Log.e("RunDetails", "denyJoin failed", e)
+                                                                    } finally {
+                                                                        rowBusy = false
+                                                                    }
+                                                                }
+                                                            }
+                                                        ) {
+                                                            Text("Deny")
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                }
+                            }
+                        }
+                    }
+
                     // Actions row
                     var joining by remember { mutableStateOf(false) }
+                    var requesting by remember { mutableStateOf(false) }
                     var leaving by remember { mutableStateOf(false) }
                     var ending by remember { mutableStateOf(false) }
                     var showCancelConfirm by remember { mutableStateOf(false) }
@@ -363,28 +640,123 @@ fun RunDetailsScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         if (!isMember) {
-                            val canJoin =
-                                statusLabel in listOf("Active", "Scheduled") && open > 0 && uid != null
-                            Button(
-                                onClick = {
-                                    if (!canJoin) return@Button
-                                    joining = true
-                                    scope.launch {
-                                        try {
-                                            joinRun(db, runId, uid!!)
-                                        } catch (e: Exception) {
-                                            Log.e("RunDetails", "joinRun failed", e)
-                                        } finally {
-                                            joining = false
+                            val canAct =
+                                statusLabel in listOf("Active", "Scheduled") && uid != null
+
+                            when (accessEnum) {
+                                RunAccess.OPEN -> {
+                                    val canJoin =
+                                        canAct && openSlots > 0
+                                    Button(
+                                        onClick = {
+                                            if (!canJoin) return@Button
+                                            joining = true
+                                            scope.launch {
+                                                try {
+                                                    joinRun(db, runId, uid!!)
+                                                } catch (e: Exception) {
+                                                    Log.e("RunDetails", "joinRun failed", e)
+                                                } finally {
+                                                    joining = false
+                                                }
+                                            }
+                                        },
+                                        enabled = canJoin && !joining,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .heightIn(min = 44.dp)
+                                    ) {
+                                        Text(if (joining) "Joining…" else "Join Run")
+                                    }
+                                }
+
+                                RunAccess.HOST_APPROVAL -> {
+                                    when {
+                                        !canAct -> {
+                                            OutlinedButton(
+                                                onClick = {},
+                                                enabled = false,
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .heightIn(min = 44.dp)
+                                            ) {
+                                                Text("Request to join")
+                                            }
+                                        }
+
+                                        hasPendingRequestFromMe -> {
+                                            OutlinedButton(
+                                                onClick = {},
+                                                enabled = false,
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .heightIn(min = 44.dp)
+                                            ) {
+                                                Text("Request sent")
+                                            }
+                                        }
+
+                                        else -> {
+                                            Button(
+                                                onClick = {
+                                                    if (!canAct) return@Button
+                                                    requesting = true
+                                                    scope.launch {
+                                                        try {
+                                                            requestJoinRun(db, runId, uid!!)
+                                                        } catch (e: Exception) {
+                                                            Log.e("RunDetails", "requestJoinRun failed", e)
+                                                        } finally {
+                                                            requesting = false
+                                                        }
+                                                    }
+                                                },
+                                                enabled = !requesting,
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .heightIn(min = 44.dp)
+                                            ) {
+                                                Text(if (requesting) "Requesting…" else "Request to join")
+                                            }
                                         }
                                     }
-                                },
-                                enabled = canJoin && !joining,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .heightIn(min = 44.dp)
-                            ) {
-                                Text(if (joining) "Joining…" else "Join Run")
+                                }
+
+                                RunAccess.INVITE_ONLY -> {
+                                    if (isAllowedForInviteOnly && canAct && openSlots > 0) {
+                                        Button(
+                                            onClick = {
+                                                if (!canAct) return@Button
+                                                joining = true
+                                                scope.launch {
+                                                    try {
+                                                        joinRun(db, runId, uid!!)
+                                                    } catch (e: Exception) {
+                                                        Log.e("RunDetails", "joinRun failed", e)
+                                                    } finally {
+                                                        joining = false
+                                                    }
+                                                }
+                                            },
+                                            enabled = !joining,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .heightIn(min = 44.dp)
+                                        ) {
+                                            Text(if (joining) "Joining…" else "Join Run")
+                                        }
+                                    } else {
+                                        OutlinedButton(
+                                            onClick = {},
+                                            enabled = false,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .heightIn(min = 44.dp)
+                                        ) {
+                                            Text("Invite only")
+                                        }
+                                    }
+                                }
                             }
                         } else if (isHost) {
                             OutlinedButton(
@@ -543,7 +915,10 @@ private data class RunDoc(
     val playerIds: List<String>,
     val name: String?,
     val startsAt: com.google.firebase.Timestamp?,
-    val endsAt: com.google.firebase.Timestamp?
+    val endsAt: com.google.firebase.Timestamp?,
+    val access: String,
+    val allowedUids: List<String>,
+    val pendingJoinsCount: Int
 ) {
     companion object {
         fun from(data: Map<String, Any>, ref: DocumentReference): RunDoc {
@@ -560,10 +935,45 @@ private data class RunDoc(
             val name = data["name"] as? String
             val startsAt = data["startsAt"] as? com.google.firebase.Timestamp
             val endsAt = data["endsAt"] as? com.google.firebase.Timestamp
+            val access = data["access"] as? String ?: RunAccess.OPEN.name
+            @Suppress("UNCHECKED_CAST")
+            val allowedUids =
+                (data["allowedUids"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+            val pending = (data["pendingJoinsCount"] as? Number)?.toInt() ?: 0
+
             return RunDoc(
-                ref, courtId, mode, status, maxPlayers, playerCount,
-                hostUid, hostId, playerIds, name, startsAt, endsAt
+                ref,
+                courtId,
+                mode,
+                status,
+                maxPlayers,
+                playerCount,
+                hostUid,
+                hostId,
+                playerIds,
+                name,
+                startsAt,
+                endsAt,
+                access,
+                allowedUids,
+                pending
             )
+        }
+    }
+}
+
+private data class JoinRequestDoc(
+    val ref: DocumentReference,
+    val uid: String,
+    val status: String,
+    val createdAt: com.google.firebase.Timestamp?
+) {
+    companion object {
+        fun from(data: Map<String, Any>, ref: DocumentReference): JoinRequestDoc {
+            val uid = data["uid"] as? String ?: ref.id
+            val status = data["status"] as? String ?: "pending"
+            val createdAt = data["createdAt"] as? com.google.firebase.Timestamp
+            return JoinRequestDoc(ref, uid, status, createdAt)
         }
     }
 }
@@ -624,7 +1034,7 @@ private fun formatWindow(
     return if (s.toLocalDate() == e.toLocalDate())
         "${dFmt.format(s)} • ${tFmt.format(s)} – ${tFmt.format(e)}"
     else
-        "${dFmt.format(s)} ${tFmt.format(s)} → ${dFmt.format(e)} ${tFmt.format(e)}"
+        "${dFmt.format(s)} ${tFmt.format(s)} → ${dFmt.format(e)} ${dFmt.format(e)}"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -646,7 +1056,6 @@ private fun EditRunSheet(
     var start by remember { mutableStateOf(tsToLocal(run.startsAt)) }
     var end by remember { mutableStateOf(tsToLocal(run.endsAt)) }
 
-    // Has this run actually started yet? (based on time window)
     val hasStarted by remember(run.startsAt) {
         mutableStateOf(
             run.startsAt?.toDate()
@@ -658,7 +1067,6 @@ private fun EditRunSheet(
         )
     }
 
-    // “Active” here really just means not cancelled/ended
     val active = run.status == "active" || run.status == "scheduled"
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -790,4 +1198,3 @@ private fun EditRunSheet(
         }
     }
 }
-

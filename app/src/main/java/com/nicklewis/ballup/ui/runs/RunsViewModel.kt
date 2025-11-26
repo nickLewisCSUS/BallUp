@@ -137,7 +137,10 @@ class RunsViewModel : ViewModel() {
                     "createdAt"   to FieldValue.serverTimestamp(),
                     "name"        to name,
                     "name_lc"     to name.lowercase(),
-                    "nameTokens"  to name.lowercase().split(" ").filter { it.isNotBlank() }
+                    "nameTokens"  to name.lowercase().split(" ").filter { it.isNotBlank() },
+                    "access"            to run.access,
+                    "allowedUids"       to run.allowedUids,
+                    "pendingJoinsCount" to run.pendingJoinsCount
                 )
                 // legacy
                 doc["startTime"] = startTs

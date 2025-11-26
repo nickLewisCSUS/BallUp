@@ -3,14 +3,18 @@ package com.nicklewis.ballup.ui.courts.components
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import com.google.firebase.Timestamp
 import com.nicklewis.ballup.model.Run
+import com.nicklewis.ballup.model.RunAccess
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -83,6 +87,14 @@ fun StartRunDialog(
     fun timeLabel(dt: LocalDateTime) =
         dt.format(DateTimeFormatter.ofPattern("EEE, MMM d h:mm a"))
 
+    // --- Access control (who can join) ---
+    var access by remember { mutableStateOf(RunAccess.OPEN) }
+    val accessOptions = listOf(
+        RunAccess.OPEN to "Open to anyone",
+        RunAccess.HOST_APPROVAL to "Host approval required",
+        RunAccess.INVITE_ONLY to "Invite only"
+    )
+
     val capValid = capInt() in 2..50
     val timeValid =
         startAt.isAfter(minStart) &&
@@ -108,8 +120,14 @@ fun StartRunDialog(
                         hostId     = null,
                         mode       = mode,
                         maxPlayers = capInt(),
+                        playerCount = 0,
                         playerIds  = emptyList(),
-                        name       = normalizeRunName(nameText)
+                        name       = normalizeRunName(nameText),
+
+                        // NEW
+                        access = access.name,
+                        allowedUids = emptyList(),
+                        pendingJoinsCount = 0
                     )
                     submitting = true
                     onCreate(run)
@@ -132,7 +150,15 @@ fun StartRunDialog(
 
         title = { Text("Create run") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            val scrollState = rememberScrollState()
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 460.dp)  // keep dialog from growing off-screen
+                    .verticalScroll(scrollState),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
 
                 // Run Name
                 OutlinedTextField(
@@ -194,7 +220,31 @@ fun StartRunDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // Date/Time pickers — keep pill style, original behavior
+                // --- Who can join this run? ---
+                Text(
+                    text = "Who can join this run?",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    accessOptions.forEach { (value, label) ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            RadioButton(
+                                selected = access == value,
+                                onClick = { access = value }
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                }
+
+                // Date/Time "pills"
                 FilledTonalButton(
                     onClick = { showStartDate = true },
                     modifier = Modifier.fillMaxWidth(),
@@ -372,4 +422,3 @@ private fun StartDatePickerDialog(
         DatePicker(state = state, showModeToggle = true)
     }
 }
-

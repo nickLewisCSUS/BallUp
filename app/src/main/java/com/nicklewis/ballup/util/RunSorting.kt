@@ -3,6 +3,7 @@ package com.nicklewis.ballup.util
 import com.google.android.gms.maps.model.LatLng
 import com.nicklewis.ballup.model.Court
 import com.nicklewis.ballup.model.Run
+import com.nicklewis.ballup.model.RunAccess
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
@@ -28,7 +29,6 @@ private fun scoreForListing(nowMs: Long, r: Run): Long {
     }
 }
 
-// UPDATED: include hostId + hostUid in RowRun
 private fun toRowRun(id: String, r: Run) = RowRun(
     id = id,
     name = r.name,
@@ -38,7 +38,10 @@ private fun toRowRun(id: String, r: Run) = RowRun(
     maxPlayers = r.maxPlayers,
     playerIds = r.playerIds ?: emptyList(),
     hostId = r.hostId,
-    hostUid = r.hostId   // Firestore uses hostId as the UID, so we mirror it here
+    hostUid = r.hostId,
+
+    access = r.access.ifBlank { RunAccess.OPEN.name },
+    allowedUids = r.allowedUids
 )
 
 // ----- single public API used by CourtsListViewModel -----

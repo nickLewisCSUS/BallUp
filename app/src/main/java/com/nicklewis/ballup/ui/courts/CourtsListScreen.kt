@@ -22,6 +22,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.nicklewis.ballup.firebase.joinRun
 import com.nicklewis.ballup.firebase.leaveRun
+import com.nicklewis.ballup.firebase.requestJoinRun
 import com.nicklewis.ballup.nav.AppNavControllerHolder
 import com.nicklewis.ballup.ui.courts.components.CourtCard
 import com.nicklewis.ballup.ui.courts.components.FilterBar
@@ -169,6 +170,31 @@ fun CourtsListScreen(
                                         joinRun(db, runId, uid)
                                     } catch (e: Exception) {
                                         Log.e("Runs", "joinRun failed", e)
+                                        snackbarHostState.showSnackbar(
+                                            message = "Couldn't join run. Please try again.",
+                                            withDismissAction = true
+                                        )
+                                    }
+                                }
+                            },
+                            onRequestJoinRun = { runId ->
+                                if (uid == null) {
+                                    Log.e("Runs", "requestJoinRun: not signed in")
+                                    return@CourtCard
+                                }
+                                scope.launch {
+                                    try {
+                                        requestJoinRun(db, runId, uid)
+                                        snackbarHostState.showSnackbar(
+                                            message = "Request sent to host.",
+                                            withDismissAction = true
+                                        )
+                                    } catch (e: Exception) {
+                                        Log.e("Runs", "requestJoinRun failed", e)
+                                        snackbarHostState.showSnackbar(
+                                            message = "Couldn't send request. Please try again.",
+                                            withDismissAction = true
+                                        )
                                     }
                                 }
                             },

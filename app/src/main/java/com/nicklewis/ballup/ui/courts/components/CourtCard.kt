@@ -25,6 +25,7 @@ fun CourtCard(
     userLoc: LatLng?,
     onStartRun: (courtId: String) -> Unit,
     onJoinRun: (runId: String) -> Unit,
+    onRequestJoinRun: (runId: String) -> Unit,
     onLeaveRun: (runId: String) -> Unit,
     onViewRun: (runId: String) -> Unit,
     starsVm: StarsViewModel,
@@ -69,6 +70,7 @@ fun CourtCard(
                             currentUid = uid,
                             onView = { onViewRun(rr.id) },
                             onJoin = { onJoinRun(rr.id) },
+                            onRequestJoin = { onRequestJoinRun(rr.id) },
                             onLeave = { onLeaveRun(rr.id) }
                         )
                     }

@@ -1,3 +1,4 @@
+// ui/courts/components/RunRow.kt
 package com.nicklewis.ballup.ui.courts.components
 
 import androidx.compose.foundation.layout.*
@@ -19,7 +20,9 @@ fun RunRow(
     onView: () -> Unit,
     onJoin: () -> Unit,
     onRequestJoin: () -> Unit,
-    onLeave: () -> Unit
+    onLeave: () -> Unit,
+    hasPendingRequest: Boolean,      // NEW
+    onCancelRequest: () -> Unit      // NEW
 ) {
     val zone = ZoneId.systemDefault()
     val s = rr.startsAt?.toDate()?.toInstant()?.atZone(zone)?.toLocalDateTime()
@@ -122,19 +125,55 @@ fun RunRow(
                                 FilledTonalButton(
                                     onClick = onJoin,
                                     shape = MaterialTheme.shapes.medium,
-                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                    contentPadding = PaddingValues(
+                                        horizontal = 14.dp,
+                                        vertical = 6.dp
+                                    )
                                 ) {
                                     Text("Join", style = MaterialTheme.typography.labelLarge)
                                 }
                             }
 
                             RunAccess.HOST_APPROVAL -> {
-                                FilledTonalButton(
-                                    onClick = onRequestJoin,
-                                    shape = MaterialTheme.shapes.medium,
-                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
-                                ) {
-                                    Text("Request", style = MaterialTheme.typography.labelLarge)
+                                if (!hasPendingRequest) {
+                                    // Normal state: user can request
+                                    FilledTonalButton(
+                                        onClick = onRequestJoin,
+                                        shape = MaterialTheme.shapes.medium,
+                                        contentPadding = PaddingValues(
+                                            horizontal = 14.dp,
+                                            vertical = 6.dp
+                                        )
+                                    ) {
+                                        Text(
+                                            "Request",
+                                            style = MaterialTheme.typography.labelLarge
+                                        )
+                                    }
+                                } else {
+                                    // Pending state: show "Requested" + Undo
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        FilledTonalButton(
+                                            onClick = { /* no-op */ },
+                                            enabled = false,
+                                            shape = MaterialTheme.shapes.medium,
+                                            contentPadding = PaddingValues(
+                                                horizontal = 14.dp,
+                                                vertical = 6.dp
+                                            )
+                                        ) {
+                                            Text(
+                                                "Requested",
+                                                style = MaterialTheme.typography.labelLarge
+                                            )
+                                        }
+                                        TextButton(onClick = onCancelRequest) {
+                                            Text("Undo", style = MaterialTheme.typography.labelSmall)
+                                        }
+                                    }
                                 }
                             }
 
@@ -143,7 +182,10 @@ fun RunRow(
                                     FilledTonalButton(
                                         onClick = onJoin,
                                         shape = MaterialTheme.shapes.medium,
-                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                        contentPadding = PaddingValues(
+                                            horizontal = 14.dp,
+                                            vertical = 6.dp
+                                        )
                                     ) {
                                         Text("Join", style = MaterialTheme.typography.labelLarge)
                                     }
@@ -152,9 +194,15 @@ fun RunRow(
                                         onClick = { /* no-op */ },
                                         enabled = false,
                                         shape = MaterialTheme.shapes.medium,
-                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                        contentPadding = PaddingValues(
+                                            horizontal = 14.dp,
+                                            vertical = 6.dp
+                                        )
                                     ) {
-                                        Text("Invite only", style = MaterialTheme.typography.labelLarge)
+                                        Text(
+                                            "Invite only",
+                                            style = MaterialTheme.typography.labelLarge
+                                        )
                                     }
                                 }
                             }
@@ -166,7 +214,10 @@ fun RunRow(
                         OutlinedButton(
                             onClick = { showLeaveConfirm = true },
                             shape = MaterialTheme.shapes.medium,
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                            contentPadding = PaddingValues(
+                                horizontal = 14.dp,
+                                vertical = 6.dp
+                            )
                         ) {
                             Text("Leave", style = MaterialTheme.typography.labelLarge)
                         }
@@ -180,7 +231,10 @@ fun RunRow(
                         OutlinedButton(
                             onClick = { showLeaveConfirm = true },
                             shape = MaterialTheme.shapes.medium,
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                            contentPadding = PaddingValues(
+                                horizontal = 14.dp,
+                                vertical = 6.dp
+                            )
                         ) {
                             Text("Leave", style = MaterialTheme.typography.labelLarge)
                         }
@@ -244,3 +298,4 @@ private fun StatusPill(text: String, filled: Boolean) {
         )
     }
 }
+

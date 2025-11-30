@@ -10,13 +10,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.google.android.gms.maps.model.LatLng
 import com.nicklewis.ballup.data.CourtLite
+import com.nicklewis.ballup.nav.AppNavControllerHolder
 import com.nicklewis.ballup.ui.components.StarButton
 import com.nicklewis.ballup.util.CourtRow
 import com.nicklewis.ballup.util.distanceKm
 import com.nicklewis.ballup.util.kmToMiles
 import com.nicklewis.ballup.vm.PrefsViewModel
 import com.nicklewis.ballup.vm.StarsViewModel
-import com.nicklewis.ballup.nav.AppNavControllerHolder
 
 @Composable
 fun CourtCard(
@@ -27,6 +27,8 @@ fun CourtCard(
     onJoinRun: (runId: String) -> Unit,
     onRequestJoinRun: (runId: String) -> Unit,
     onLeaveRun: (runId: String) -> Unit,
+    onCancelRequestRun: (runId: String) -> Unit,           // NEW
+    hasPendingRequestForRun: (runId: String) -> Boolean,   // NEW
     onViewRun: (runId: String) -> Unit,
     starsVm: StarsViewModel,
     prefsVm: PrefsViewModel,
@@ -40,7 +42,10 @@ fun CourtCard(
         Column(Modifier.padding(12.dp)) {
 
             // --- Header: name + star
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Text(
                     text = court.name.orEmpty(),
                     style = MaterialTheme.typography.titleMedium,
@@ -49,7 +54,12 @@ fun CourtCard(
                 StarButton(
                     checked = starred.contains(courtId),
                     onCheckedChange = { v ->
-                        val lite = CourtLite(courtId, court.name, court.geo?.lat, court.geo?.lng)
+                        val lite = CourtLite(
+                            id = courtId,
+                            name = court.name,
+                            lat = court.geo?.lat,
+                            lng = court.geo?.lng
+                        )
                         starsVm.toggle(lite, v, runAlertsEnabled = prefs.runAlerts)
                     }
                 )
@@ -71,7 +81,9 @@ fun CourtCard(
                             onView = { onViewRun(rr.id) },
                             onJoin = { onJoinRun(rr.id) },
                             onRequestJoin = { onRequestJoinRun(rr.id) },
-                            onLeave = { onLeaveRun(rr.id) }
+                            onLeave = { onLeaveRun(rr.id) },
+                            hasPendingRequest = hasPendingRequestForRun(rr.id),      // NEW
+                            onCancelRequest = { onCancelRequestRun(rr.id) }          // NEW
                         )
                     }
                 }
@@ -88,7 +100,10 @@ fun CourtCard(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 TextButton(
-                    onClick = { AppNavControllerHolder.navController?.navigate("court/$courtId/runs") }
+                    onClick = {
+                        AppNavControllerHolder.navController
+                            ?.navigate("court/$courtId/runs")
+                    }
                 ) {
                     Text("See all runs")
                 }

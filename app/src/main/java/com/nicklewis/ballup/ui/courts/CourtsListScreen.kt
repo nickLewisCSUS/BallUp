@@ -1,3 +1,4 @@
+// ui/courts/CourtsListScreen.kt
 package com.nicklewis.ballup.ui.courts
 
 import android.Manifest
@@ -23,12 +24,13 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.nicklewis.ballup.data.joinRun
 import com.nicklewis.ballup.data.leaveRun
 import com.nicklewis.ballup.data.requestJoinRun
+import com.nicklewis.ballup.data.cancelJoinRequest     // NEW
 import com.nicklewis.ballup.nav.AppNavControllerHolder
 import com.nicklewis.ballup.ui.courts.components.CourtCard
 import com.nicklewis.ballup.ui.courts.components.FilterBar
 import com.nicklewis.ballup.ui.courts.components.SearchBarWithSuggestions
-import com.nicklewis.ballup.ui.runs.StartRunDialog
 import com.nicklewis.ballup.ui.runs.RunsViewModel
+import com.nicklewis.ballup.ui.runs.StartRunDialog
 import com.nicklewis.ballup.util.fetchLastKnownLocation
 import com.nicklewis.ballup.util.hasLocationPermission
 import com.nicklewis.ballup.vm.PrefsViewModel
@@ -79,6 +81,9 @@ fun CourtsListScreen(
     val uid = FirebaseAuth.getInstance().currentUser?.uid
     val scope = rememberCoroutineScope()
     val db = remember { FirebaseFirestore.getInstance() }
+
+    // NEW: runId -> has pending request from this user
+    val pendingRequests = remember { mutableStateMapOf<String, Boolean>() }
 
     val visibleRows = remember(vm.rows, showStarredOnly, starredIds) {
         if (!showStarredOnly) {
@@ -185,16 +190,27 @@ fun CourtsListScreen(
                                 scope.launch {
                                     try {
                                         requestJoinRun(db, runId, uid)
+                                        pendingRequests[runId] = true       // mark as requested
                                         snackbarHostState.showSnackbar(
                                             message = "Request sent to host.",
                                             withDismissAction = true
                                         )
                                     } catch (e: Exception) {
                                         Log.e("Runs", "requestJoinRun failed", e)
-                                        snackbarHostState.showSnackbar(
-                                            message = "Couldn't send request. Please try again.",
-                                            withDismissAction = true
-                                        )
+
+                                        // If backend says we already requested, mirror that in UI
+                                        if (e.message?.contains("already requested", ignoreCase = true) == true) {
+                                            pendingRequests[runId] = true
+                                            snackbarHostState.showSnackbar(
+                                                message = "You’ve already requested to join this run.",
+                                                withDismissAction = true
+                                            )
+                                        } else {
+                                            snackbarHostState.showSnackbar(
+                                                message = "Couldn't send request. Please try again.",
+                                                withDismissAction = true
+                                            )
+                                        }
                                     }
                                 }
                             },
@@ -208,7 +224,10 @@ fun CourtsListScreen(
                                         leaveRun(db, runId, uid)
                                     } catch (e: Exception) {
                                         if (e.message?.contains("HOST_SOLO_CANNOT_LEAVE") == true) {
-                                            Log.w("Runs", "Host is solo and cannot leave; must cancel run.")
+                                            Log.w(
+                                                "Runs",
+                                                "Host is solo and cannot leave; must cancel run."
+                                            )
                                             snackbarHostState.showSnackbar(
                                                 message = "You’re the only player in this run. Cancel it instead.",
                                                 withDismissAction = true
@@ -222,6 +241,31 @@ fun CourtsListScreen(
                                         }
                                     }
                                 }
+                            },
+                            onCancelRequestRun = { runId ->         // NEW
+                                if (uid == null) {
+                                    Log.e("Runs", "cancelJoinRequest: not signed in")
+                                    return@CourtCard
+                                }
+                                scope.launch {
+                                    try {
+                                        cancelJoinRequest(db, runId, uid)
+                                        pendingRequests[runId] = false
+                                        snackbarHostState.showSnackbar(
+                                            message = "Request cancelled.",
+                                            withDismissAction = true
+                                        )
+                                    } catch (e: Exception) {
+                                        Log.e("Runs", "cancelJoinRequest failed", e)
+                                        snackbarHostState.showSnackbar(
+                                            message = "Couldn't cancel request. Please try again.",
+                                            withDismissAction = true
+                                        )
+                                    }
+                                }
+                            },
+                            hasPendingRequestForRun = { runId ->    // NEW
+                                pendingRequests[runId] == true
                             },
                             onViewRun = { runId ->
                                 AppNavControllerHolder.navController?.navigate("run/$runId") {

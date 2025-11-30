@@ -155,5 +155,35 @@ suspend fun requestJoinRun(db: FirebaseFirestore, runId: String, uid: String) {
     }.await()
 }
 
+suspend fun cancelJoinRequest(
+    db: FirebaseFirestore,
+    runId: String,
+    uid: String
+) {
+    val runRef = db.collection("runs").document(runId)
+    val reqRef = runRef.collection("joinRequests").document(uid)
+
+    db.runTransaction { tx ->
+        val runSnap = tx.get(runRef)
+        if (!runSnap.exists()) {
+            throw IllegalStateException("Run not found")
+        }
+
+        val existing = tx.get(reqRef)
+        if (!existing.exists() || existing.getString("status") != "pending") {
+            // nothing pending → nothing to cancel
+            return@runTransaction null
+        }
+
+        tx.delete(reqRef)
+        tx.update(
+            runRef,
+            mapOf("pendingJoinsCount" to FieldValue.increment(-1))
+        )
+
+        null
+    }.await()
+}
+
 
 

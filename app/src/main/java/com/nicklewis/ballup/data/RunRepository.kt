@@ -1,4 +1,4 @@
-package com.nicklewis.ballup.firebase
+package com.nicklewis.ballup.data
 
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore

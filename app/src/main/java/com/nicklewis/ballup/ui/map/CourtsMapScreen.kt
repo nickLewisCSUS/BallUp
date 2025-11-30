@@ -7,14 +7,6 @@ import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.mutableStateMapOf
@@ -34,28 +26,17 @@ import com.google.android.gms.maps.MapView
 import com.google.android.gms.maps.MapsInitializer
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.MarkerOptions
-import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.ktx.toObject
-import com.nicklewis.ballup.data.CourtLite
-import com.nicklewis.ballup.firebase.joinRun
-import com.nicklewis.ballup.firebase.leaveRun
-import com.nicklewis.ballup.firebase.requestJoinRun
-import com.nicklewis.ballup.map.MapCameraVM
 import com.nicklewis.ballup.model.Court
 import com.nicklewis.ballup.model.Run
-import com.nicklewis.ballup.model.RunAccess
-import com.nicklewis.ballup.ui.courts.components.StartRunDialog
+import com.nicklewis.ballup.ui.runs.StartRunDialog
 import com.nicklewis.ballup.ui.runs.RunsViewModel
 import com.nicklewis.ballup.util.centerOnLastKnown
 import com.nicklewis.ballup.util.enableMyLocation
 import com.nicklewis.ballup.util.hasLocationPermission
-import com.nicklewis.ballup.util.openDirections
 import com.nicklewis.ballup.vm.StarsViewModel
-import kotlinx.coroutines.launch
-import java.time.LocalDate
-import java.time.ZoneId
 
 @Composable
 fun CourtsMapScreen(
@@ -66,6 +47,7 @@ fun CourtsMapScreen(
     onOpenRunDetails: (runId: String) -> Unit
 ) {
     val db = remember { FirebaseFirestore.getInstance() }
+
     var courts by remember { mutableStateOf(listOf<Pair<String, Court>>()) }
     var runs by remember { mutableStateOf(listOf<Pair<String, Run>>()) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -89,10 +71,11 @@ fun CourtsMapScreen(
     // Filter dropdown state
     var filtersExpanded by remember { mutableStateOf(false) }
 
+    // Start-run dialog state
     var showCreate by remember { mutableStateOf<String?>(null) }
     var dialogError by remember { mutableStateOf<String?>(null) }
 
-    // Firestore listeners
+    // ----- Firestore listeners for courts & runs -----
     LaunchedEffect(Unit) {
         db.collection("courts")
             .orderBy("name", Query.Direction.ASCENDING)
@@ -106,6 +89,7 @@ fun CourtsMapScreen(
                     .orEmpty()
             }
     }
+
     LaunchedEffect(Unit) {
         db.collection("runs")
             .whereEqualTo("status", "active")
@@ -154,7 +138,7 @@ fun CourtsMapScreen(
     var gmap by remember { mutableStateOf<com.google.android.gms.maps.GoogleMap?>(null) }
     val fused = remember { LocationServices.getFusedLocationProviderClient(context) }
 
-    // Permissions
+    // ----- Location permissions -----
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
@@ -169,6 +153,7 @@ fun CourtsMapScreen(
             }
         }
     }
+
     LaunchedEffect(Unit) {
         if (!hasLocationPermission(context)) {
             permissionLauncher.launch(
@@ -180,7 +165,7 @@ fun CourtsMapScreen(
         }
     }
 
-    // UI
+    // ----- Map + filters UI -----
     Box(Modifier.fillMaxSize()) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -198,15 +183,16 @@ fun CourtsMapScreen(
                     }
 
                     if (hasLocationPermission(context)) enableMyLocation(m, context)
-                    if (savedCenter != null && savedZoom != null)
+                    if (savedCenter != null && savedZoom != null) {
                         m.moveCamera(
                             CameraUpdateFactory.newLatLngZoom(
                                 savedCenter!!,
                                 savedZoom!!
                             )
                         )
-                    else if (hasLocationPermission(context))
+                    } else if (hasLocationPermission(context)) {
                         centerOnLastKnown(m, fused, context)
+                    }
 
                     m.setOnCameraMoveStartedListener { reason ->
                         if (reason ==
@@ -295,8 +281,16 @@ fun CourtsMapScreen(
         }
     }
 
-    // Markers + fit
-    LaunchedEffect(gmap, courts, runs, showIndoor, showOutdoor, showStarredOnly, starredIds) {
+    // ----- Markers + auto-fit behavior -----
+    LaunchedEffect(
+        gmap,
+        courts,
+        runs,
+        showIndoor,
+        showOutdoor,
+        showStarredOnly,
+        starredIds
+    ) {
         val map = gmap ?: return@LaunchedEffect
         map.clear()
 
@@ -375,292 +369,24 @@ fun CourtsMapScreen(
         }
     }
 
-    // Bottom sheet for selected court
-    if (selected != null) {
-        val (courtId, court) = selected!!
-        val uid = FirebaseAuth.getInstance().currentUser?.uid
-        val scope = rememberCoroutineScope()
-        val today = LocalDate.now()
-
-        val courtRuns = runs.filter { (_, run) ->
-            if (run.courtId != courtId || run.status != "active") return@filter false
-            val ts = run.startsAt ?: return@filter false
-            val runDate = ts.toDate().toInstant()
-                .atZone(ZoneId.systemDefault())
-                .toLocalDate()
-            runDate == today
-        }
-
-        val isStarred = courtId in starredIds
-
-        ModalBottomSheet(
-            onDismissRequest = { selected = null },
-            dragHandle = { BottomSheetDefaults.DragHandle() }
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                // Header row: court name + star button
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        court.name.orEmpty(),
-                        style = MaterialTheme.typography.titleLarge,
-                        modifier = Modifier.weight(1f)
-                    )
-
-                    IconButton(
-                        onClick = {
-                            val lat = court.geo?.lat ?: 0.0
-                            val lng = court.geo?.lng ?: 0.0
-
-                            val courtLite = CourtLite(
-                                id = courtId,
-                                name = court.name.orEmpty(),
-                                lat = lat,
-                                lng = lng
-                            )
-
-                            starsVm.toggle(
-                                court = courtLite,
-                                star = !isStarred,
-                                runAlertsEnabled = false
-                            )
-                        }
-                    ) {
-                        Icon(
-                            imageVector = if (isStarred) Icons.Filled.Star else Icons.Outlined.StarBorder,
-                            contentDescription = if (isStarred) "Unfavorite court" else "Favorite court"
-                        )
-                    }
-                }
-
-                Text(court.address.orEmpty(), style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    listOfNotNull(
-                        court.type?.uppercase(),
-                        if (court.amenities?.lights == true) "Lights" else null,
-                        if (court.amenities?.restrooms == true) "Restrooms" else null
-                    ).joinToString(" • "),
-                    style = MaterialTheme.typography.bodySmall
-                )
-
-                // Show today's runs (if any)
-                if (courtRuns.isNotEmpty()) {
-                    Text(
-                        text = "Pickup running: ${courtRuns.size} run" +
-                                if (courtRuns.size == 1) "" else "s",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-
-                    courtRuns.forEach { (runId, currentRun) ->
-                        Spacer(Modifier.height(8.dp))
-                        Surface(
-                            tonalElevation = 2.dp,
-                            shape = MaterialTheme.shapes.medium,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                val hostName = currentRun.hostId
-                                    ?.let { userNames[it] }
-                                    ?: "Host"
-
-                                Text(
-                                    text = currentRun.mode?.let { "Pickup • $it" } ?: "Pickup run",
-                                    style = MaterialTheme.typography.titleSmall
-                                )
-                                Text(
-                                    text = "Host: $hostName",
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                                Text(
-                                    text = "Players: ${currentRun.playerCount}/${currentRun.maxPlayers}",
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-
-                                AttendeeChips(
-                                    currentRun = currentRun,
-                                    isHost = (uid != null && currentRun.hostId == uid),
-                                    runId = runId,
-                                    uid = uid,
-                                    userNames = userNames
-                                )
-
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    val alreadyIn = uid != null &&
-                                            (currentRun.playerIds?.contains(uid) == true)
-                                    val isHost = uid != null && currentRun.hostId == uid
-
-                                    // NEW: access-aware behavior
-                                    val accessEnum = try {
-                                        RunAccess.valueOf(
-                                            currentRun.access ?: RunAccess.OPEN.name
-                                        )
-                                    } catch (_: IllegalArgumentException) {
-                                        RunAccess.OPEN
-                                    }
-
-                                    val allowedUids = currentRun.allowedUids ?: emptyList()
-                                    val isAllowedForInviteOnly =
-                                        uid != null && allowedUids.contains(uid)
-
-                                    val openSlots =
-                                        (currentRun.maxPlayers - currentRun.playerCount)
-                                            .coerceAtLeast(0)
-                                    val canAct = uid != null && openSlots > 0
-
-                                    if (!alreadyIn) {
-                                        when (accessEnum) {
-                                            RunAccess.OPEN -> {
-                                                val canJoin = canAct
-                                                Button(
-                                                    onClick = {
-                                                        if (!canJoin || uid == null) return@Button
-                                                        scope.launch {
-                                                            try {
-                                                                joinRun(db, runId, uid)
-                                                            } catch (e: Exception) {
-                                                                Log.e("JOIN", "Failed", e)
-                                                            }
-                                                        }
-                                                    },
-                                                    enabled = canJoin,
-                                                    modifier = Modifier.weight(1f)
-                                                ) {
-                                                    Text(if (openSlots > 0) "Join" else "Full")
-                                                }
-                                            }
-
-                                            RunAccess.HOST_APPROVAL -> {
-                                                Button(
-                                                    onClick = {
-                                                        if (!canAct || uid == null) return@Button
-                                                        scope.launch {
-                                                            try {
-                                                                requestJoinRun(db, runId, uid)
-                                                            } catch (e: Exception) {
-                                                                Log.e("JOIN_REQ", "Failed", e)
-                                                            }
-                                                        }
-                                                    },
-                                                    enabled = canAct,
-                                                    modifier = Modifier.weight(1f)
-                                                ) {
-                                                    Text(
-                                                        if (openSlots > 0)
-                                                            "Request to join"
-                                                        else
-                                                            "Full"
-                                                    )
-                                                }
-                                            }
-
-                                            RunAccess.INVITE_ONLY -> {
-                                                if (isAllowedForInviteOnly && canAct) {
-                                                    Button(
-                                                        onClick = {
-                                                            if (!canAct || uid == null) return@Button
-                                                            scope.launch {
-                                                                try {
-                                                                    joinRun(db, runId, uid)
-                                                                } catch (e: Exception) {
-                                                                    Log.e("JOIN", "Failed", e)
-                                                                }
-                                                            }
-                                                        },
-                                                        enabled = canAct,
-                                                        modifier = Modifier.weight(1f)
-                                                    ) {
-                                                        Text("Join")
-                                                    }
-                                                } else {
-                                                    OutlinedButton(
-                                                        onClick = {},
-                                                        enabled = false,
-                                                        modifier = Modifier.weight(1f)
-                                                    ) {
-                                                        Text("Invite only")
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    } else if (!isHost) {
-                                        // Regular player can leave
-                                        OutlinedButton(
-                                            onClick = {
-                                                if (uid != null) {
-                                                    scope.launch {
-                                                        try {
-                                                            leaveRun(db, runId, uid)
-                                                        } catch (e: Exception) {
-                                                            Log.e("LEAVE", "Failed", e)
-                                                        }
-                                                    }
-                                                }
-                                            },
-                                            modifier = Modifier.weight(1f)
-                                        ) { Text("Leave") }
-                                    }
-
-                                    // Everyone (including host) can open details
-                                    OutlinedButton(
-                                        onClick = { onOpenRunDetails(runId) },
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Text(if (isHost) "Manage run" else "View details")
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(12.dp))
-                }
-
-                // Always show Start run + Directions row
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(
-                        onClick = {
-                            dialogError = null
-                            showCreate = courtId
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Start run here") }
-
-                    val lat = court.geo?.lat
-                    val lng = court.geo?.lng
-                    OutlinedButton(
-                        enabled = lat != null && lng != null,
-                        onClick = {
-                            if (lat != null && lng != null) {
-                                openDirections(context, lat, lng, court.name)
-                            }
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Directions") }
-                }
-
-                Spacer(Modifier.height(8.dp))
+    // ----- Bottom sheet for selected court -----
+    selected?.let { selectedCourt ->
+        CourtBottomSheet(
+            selected = selectedCourt,
+            runs = runs,
+            userNames = userNames,
+            starredIds = starredIds,
+            starsVm = starsVm,
+            onOpenRunDetails = onOpenRunDetails,
+            onDismiss = { selected = null },
+            onStartRunHere = { courtId ->
+                dialogError = null
+                showCreate = courtId
             }
-        }
+        )
     }
 
-    // StartRunDialog (same flow as CourtsListScreen)
+    // ----- StartRunDialog (same flow as CourtsListScreen) -----
     showCreate?.let { courtId ->
         StartRunDialog(
             visible = true,
@@ -686,6 +412,7 @@ fun CourtsMapScreen(
         )
     }
 
+    // ----- Error text -----
     error?.let {
         Text(
             "Map error: $it",
@@ -694,6 +421,8 @@ fun CourtsMapScreen(
         )
     }
 }
+
+/* ---------- Helpers ---------- */
 
 @Composable
 private fun rememberMapViewWithLifecycle(): MapView {
@@ -716,53 +445,6 @@ private fun rememberMapViewWithLifecycle(): MapView {
         onDispose { lifecycle.removeObserver(observer) }
     }
     return mapView
-}
-
-@Composable
-private fun AttendeeChips(
-    currentRun: Run,
-    isHost: Boolean,
-    runId: String?,
-    uid: String?,
-    userNames: Map<String, String>
-) {
-    val scope = rememberCoroutineScope()
-    val db = FirebaseFirestore.getInstance()
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        currentRun.playerIds.orEmpty().forEach { pid ->
-            val baseName = userNames[pid] ?: pid.takeLast(6)
-            val labelText =
-                if (pid == currentRun.hostId) "Host • $baseName" else baseName
-
-            AssistChip(
-                onClick = {},
-                label = { Text(labelText) },
-                trailingIcon = if (isHost && pid != currentRun.hostId) {
-                    {
-                        IconButton(
-                            onClick = {
-                                if (runId != null && uid != null) {
-                                    scope.launch {
-                                        try {
-                                            com.nicklewis.ballup.firebase.kickPlayer(
-                                                db,
-                                                runId,
-                                                uid,
-                                                pid
-                                            )
-                                        } catch (e: Exception) {
-                                            Log.e("RUN", "kick", e)
-                                        }
-                                    }
-                                }
-                            }
-                        ) { Icon(Icons.Default.Close, contentDescription = "Kick") }
-                    }
-                } else null
-            )
-        }
-    }
-    Spacer(Modifier.height(8.dp))
 }
 
 private fun humanizeCreateRunError(t: Throwable): String {

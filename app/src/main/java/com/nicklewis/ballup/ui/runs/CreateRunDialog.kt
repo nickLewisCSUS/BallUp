@@ -1,5 +1,5 @@
-// ui/courts/components/StartRunDialog.kt
-package com.nicklewis.ballup.ui.courts.components
+// ui/courts/components/CreateRunDialog.kt
+package com.nicklewis.ballup.ui.runs
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
@@ -12,12 +12,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import com.google.firebase.Timestamp
 import com.nicklewis.ballup.model.Run
 import com.nicklewis.ballup.model.RunAccess
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -390,14 +393,14 @@ private fun StartDatePickerDialog(
         yearRange = IntRange(minDate.year, maxDate.year)
     )
 
-    androidx.compose.material3.DatePickerDialog(
+    DatePickerDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
             TextButton(onClick = {
                 val millis = state.selectedDateMillis
                 if (millis != null) {
-                    val pickedUtcDate = java.time.Instant.ofEpochMilli(millis)
-                        .atZone(java.time.ZoneOffset.UTC)
+                    val pickedUtcDate = Instant.ofEpochMilli(millis)
+                        .atZone(ZoneOffset.UTC)
                         .toLocalDate()
 
                     val clamped = when {
@@ -417,7 +420,7 @@ private fun StartDatePickerDialog(
             }) { Text("OK") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+        properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         DatePicker(state = state, showModeToggle = true)
     }

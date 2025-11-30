@@ -1,4 +1,4 @@
-package com.nicklewis.ballup
+package com.nicklewis.ballup.ui.courts.components
 
 import android.location.Geocoder
 import androidx.compose.foundation.layout.*

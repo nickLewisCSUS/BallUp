@@ -1,7 +1,7 @@
-package com.nicklewis.ballup.map
+package com.nicklewis.ballup.ui.map
 
-import androidx.lifecycle.ViewModel
 import androidx.compose.runtime.mutableStateOf
+import androidx.lifecycle.ViewModel
 import com.google.android.gms.maps.model.LatLng
 
 class MapCameraVM : ViewModel() {

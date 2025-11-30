@@ -8,8 +8,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -17,20 +15,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
-import com.nicklewis.ballup.firebase.joinRun
-import com.nicklewis.ballup.firebase.leaveRun
-import com.nicklewis.ballup.firebase.requestJoinRun
+import com.nicklewis.ballup.data.joinRun
+import com.nicklewis.ballup.data.leaveRun
+import com.nicklewis.ballup.data.requestJoinRun
 import com.nicklewis.ballup.model.RunAccess
 import com.nicklewis.ballup.util.openDirections
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
-import java.time.LocalDateTime
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -65,11 +59,8 @@ fun RunDetailsScreen(
     // invited players (for INVITE_ONLY)
     var invitedProfiles by remember { mutableStateOf<Map<String, PlayerProfile>>(emptyMap()) }
 
-    // invite dialog state
+    // invite dialog visibility
     var showInviteDialog by remember { mutableStateOf(false) }
-    var inviteUsername by remember { mutableStateOf("") }
-    var inviteBusy by remember { mutableStateOf(false) }
-    var inviteError by remember { mutableStateOf<String?>(null) }
 
     // current viewer's join request status (pending/approved/denied)
     var myRequestStatus by remember { mutableStateOf<String?>(null) }
@@ -565,11 +556,7 @@ fun RunDetailsScreen(
                                 Spacer(Modifier.height(4.dp))
 
                                 OutlinedButton(
-                                    onClick = {
-                                        inviteUsername = ""
-                                        inviteError = null
-                                        showInviteDialog = true
-                                    },
+                                    onClick = { showInviteDialog = true },
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Text("Invite player")
@@ -1022,411 +1009,11 @@ fun RunDetailsScreen(
     }
 
     // ---- Invite dialog (host, invite-only) ----
-    val currentRun = run
-    if (showInviteDialog && currentRun != null && isHost) {
-        AlertDialog(
-            onDismissRequest = {
-                if (!inviteBusy) {
-                    showInviteDialog = false
-                    inviteError = null
-                }
-            },
-            title = { Text("Invite player") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = "Enter the username of the player you want to invite.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    OutlinedTextField(
-                        value = inviteUsername,
-                        onValueChange = {
-                            inviteUsername = it.trim().take(32)
-                            inviteError = null
-                        },
-                        label = { Text("Username") },
-                        singleLine = true,
-                        isError = inviteError != null,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    if (inviteError != null) {
-                        Text(
-                            text = inviteError ?: "",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = inviteUsername.isNotBlank() && !inviteBusy,
-                    onClick = {
-                        if (inviteUsername.isBlank()) return@TextButton
-                        inviteBusy = true
-                        val usernameToFind = inviteUsername
-                        val runRef = currentRun.ref
-                        scope.launch {
-                            try {
-                                inviteError = null
-                                // Look up user by username
-                                val snap = db.collection("users")
-                                    .whereEqualTo("username", usernameToFind)
-                                    .limit(1)
-                                    .get()
-                                    .await()
-
-                                if (snap.isEmpty) {
-                                    inviteError = "No user found with that username."
-                                } else {
-                                    val doc = snap.documents.first()
-                                    val invitedUid = doc.id
-
-                                    if (invitedUid == uid) {
-                                        inviteError = "You’re already in this run."
-                                    } else if (currentRun.allowedUids.contains(invitedUid)) {
-                                        inviteError = "This user is already invited."
-                                    } else if (currentRun.playerIds.contains(invitedUid)) {
-                                        inviteError = "This user is already playing."
-                                    } else {
-                                        runRef.update(
-                                            "allowedUids",
-                                            FieldValue.arrayUnion(invitedUid)
-                                        ).await()
-                                        // Success → close dialog
-                                        showInviteDialog = false
-                                        inviteUsername = ""
-                                        inviteError = null
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                Log.e("RunDetails", "invite user failed", e)
-                                inviteError = "Failed to send invite. Try again."
-                            } finally {
-                                inviteBusy = false
-                            }
-                        }
-                    }
-                ) {
-                    if (inviteBusy) {
-                        CircularProgressIndicator(
-                            strokeWidth = 2.dp,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    } else {
-                        Text("Invite")
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !inviteBusy,
-                    onClick = {
-                        showInviteDialog = false
-                        inviteError = null
-                    }
-                ) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
-}
-
-/* ---------- Helpers & local models ---------- */
-
-private data class RunDoc(
-    val ref: DocumentReference,
-    val courtId: String?,
-    val mode: String?,
-    val status: String?,
-    val maxPlayers: Int,
-    val playerCount: Int,
-    val hostUid: String?,
-    val hostId: String?,
-    val playerIds: List<String>,
-    val name: String?,
-    val startsAt: com.google.firebase.Timestamp?,
-    val endsAt: com.google.firebase.Timestamp?,
-    val access: String,
-    val allowedUids: List<String>,
-    val pendingJoinsCount: Int
-) {
-    companion object {
-        fun from(data: Map<String, Any>, ref: DocumentReference): RunDoc {
-            val courtId = data["courtId"] as? String
-            val mode = data["mode"] as? String
-            val status = data["status"] as? String ?: "active"
-            val maxPlayers = (data["maxPlayers"] as? Number)?.toInt() ?: 10
-            val playerCount = (data["playerCount"] as? Number)?.toInt() ?: 0
-            val hostUid = data["hostUid"] as? String
-            val hostId = data["hostId"] as? String
-            @Suppress("UNCHECKED_CAST")
-            val playerIds =
-                (data["playerIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
-            val name = data["name"] as? String
-            val startsAt = data["startsAt"] as? com.google.firebase.Timestamp
-            val endsAt = data["endsAt"] as? com.google.firebase.Timestamp
-            val access = data["access"] as? String ?: RunAccess.OPEN.name
-            @Suppress("UNCHECKED_CAST")
-            val allowedUids =
-                (data["allowedUids"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
-            val pending = (data["pendingJoinsCount"] as? Number)?.toInt() ?: 0
-
-            return RunDoc(
-                ref,
-                courtId,
-                mode,
-                status,
-                maxPlayers,
-                playerCount,
-                hostUid,
-                hostId,
-                playerIds,
-                name,
-                startsAt,
-                endsAt,
-                access,
-                allowedUids,
-                pending
-            )
-        }
-    }
-}
-
-private data class JoinRequestDoc(
-    val ref: DocumentReference,
-    val uid: String,
-    val status: String,
-    val createdAt: com.google.firebase.Timestamp?
-) {
-    companion object {
-        fun from(data: Map<String, Any>, ref: DocumentReference): JoinRequestDoc {
-            val uid = data["uid"] as? String ?: ref.id
-            val status = data["status"] as? String ?: "pending"
-            val createdAt = data["createdAt"] as? com.google.firebase.Timestamp
-            return JoinRequestDoc(ref, uid, status, createdAt)
-        }
-    }
-}
-
-private data class PlayerProfile(
-    val username: String,
-    val skillLevel: String?,
-    val playStyle: String?,
-    val heightBracket: String?,
-    val favoriteCourts: List<String>,
-    val displayName: String?
-)
-
-private suspend fun lookupUserProfile(
-    db: FirebaseFirestore,
-    uid: String
-): PlayerProfile? {
-    return try {
-        val doc = db.collection("users").document(uid).get().await()
-        if (!doc.exists()) {
-            Log.d("PROFILE", "No user doc for $uid")
-            null
-        } else {
-            val username = doc.getString("username") ?: uid
-            val skillLevel = doc.getString("skillLevel")
-            val playStyle = doc.getString("playStyle")
-            val heightBracket = doc.getString("heightBracket")
-            val displayName = doc.getString("displayName")
-            @Suppress("UNCHECKED_CAST")
-            val fav = (doc.get("favoriteCourts") as? List<*>)?.mapNotNull { it as? String }
-                ?: emptyList()
-
-            PlayerProfile(
-                username = username,
-                skillLevel = skillLevel,
-                playStyle = playStyle,
-                heightBracket = heightBracket,
-                favoriteCourts = fav,
-                displayName = displayName
-            )
-        }
-    } catch (e: Exception) {
-        Log.e("PROFILE", "Error looking up $uid", e)
-        null
-    }
-}
-
-private fun formatWindow(
-    start: com.google.firebase.Timestamp?,
-    end: com.google.firebase.Timestamp?
-): String {
-    if (start == null || end == null) return "Time: not set"
-    val zone = ZoneId.systemDefault()
-    val s = start.toDate().toInstant().atZone(zone).toLocalDateTime()
-    val e = end.toDate().toInstant().atZone(zone).toLocalDateTime()
-    val dFmt = DateTimeFormatter.ofPattern("EEE, MMM d")
-    val tFmt = DateTimeFormatter.ofPattern("h:mm a")
-    return if (s.toLocalDate() == e.toLocalDate())
-        "${dFmt.format(s)} • ${tFmt.format(s)} – ${tFmt.format(e)}"
-    else
-        "${dFmt.format(s)} ${tFmt.format(s)} → ${dFmt.format(e)} ${dFmt.format(e)}"
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun EditRunSheet(
-    run: RunDoc,
-    onDismiss: () -> Unit,
-    onSave: (Map<String, Any?>) -> Unit
-) {
-    var name by remember { mutableStateOf(run.name.orEmpty()) }
-    val modes = listOf("5v5", "4v4", "3v3", "2v2", "Open gym")
-    var mode by remember { mutableStateOf(run.mode ?: "5v5") }
-    var max by remember { mutableStateOf(run.maxPlayers) }
-
-    fun tsToLocal(ts: com.google.firebase.Timestamp?): LocalDateTime =
-        ts?.toDate()?.toInstant()?.atZone(ZoneId.systemDefault())?.toLocalDateTime()
-            ?: LocalDateTime.now()
-
-    var start by remember { mutableStateOf(tsToLocal(run.startsAt)) }
-    var end by remember { mutableStateOf(tsToLocal(run.endsAt)) }
-
-    val hasStarted by remember(run.startsAt) {
-        mutableStateOf(
-            run.startsAt?.toDate()
-                ?.toInstant()
-                ?.atZone(ZoneId.systemDefault())
-                ?.toLocalDateTime()
-                ?.let { it.isBefore(LocalDateTime.now()) || it.isEqual(LocalDateTime.now()) }
-                ?: false
-        )
-    }
-
-    val active = run.status == "active" || run.status == "scheduled"
-
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            Modifier
-                .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            Text("Edit run", style = MaterialTheme.typography.titleLarge)
-
-            OutlinedTextField(
-                value = name,
-                onValueChange = { name = it.take(40) },
-                label = { Text("Run name") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            var expanded by remember { mutableStateOf(false) }
-            ExposedDropdownMenuBox(
-                expanded = expanded,
-                onExpandedChange = { expanded = it }
-            ) {
-                OutlinedTextField(
-                    readOnly = true,
-                    value = mode,
-                    onValueChange = {},
-                    label = { Text("Mode") },
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
-                    modifier = Modifier
-                        .menuAnchor()
-                        .fillMaxWidth()
-                )
-                ExposedDropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = { expanded = false }
-                ) {
-                    modes.forEach {
-                        DropdownMenuItem(
-                            text = { Text(it) },
-                            onClick = { mode = it; expanded = false }
-                        )
-                    }
-                }
-            }
-
-            Column {
-                val minCap = run.playerIds.size.coerceAtLeast(2)
-                Text("Capacity: $max (min $minCap)")
-                Slider(
-                    value = max.toFloat(),
-                    onValueChange = { max = it.toInt().coerceIn(minCap, 30) },
-                    valueRange = minCap.toFloat()..30f,
-                    steps = (30 - minCap) - 1
-                )
-            }
-
-            Text("Start time", style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { start = start.minusHours(1) }, enabled = !hasStarted) {
-                    Text("−1h")
-                }
-                OutlinedButton(onClick = { start = start.plusHours(1) }, enabled = !hasStarted) {
-                    Text("+1h")
-                }
-                Text(
-                    DateTimeFormatter.ofPattern("EEE, MMM d • h:mm a").format(start),
-                    modifier = Modifier.padding(top = 12.dp)
-                )
-            }
-
-            Text("End time", style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { end = end.minusHours(1) }) { Text("−1h") }
-                OutlinedButton(onClick = { end = end.plusHours(1) }) { Text("+1h") }
-                Text(
-                    DateTimeFormatter.ofPattern("EEE, MMM d • h:mm a").format(end),
-                    modifier = Modifier.padding(top = 12.dp)
-                )
-            }
-
-            val endAfterStart = end.isAfter(start)
-            val endAfterNowIfActive = !active || end.isAfter(LocalDateTime.now())
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                OutlinedButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.weight(1f)
-                ) { Text("Cancel") }
-
-                Button(
-                    onClick = {
-                        val patch = mutableMapOf<String, Any?>(
-                            "name" to name.trim().replace(Regex("\\s+"), " "),
-                            "mode" to mode,
-                            "maxPlayers" to max,
-                            "endsAt" to com.google.firebase.Timestamp(
-                                java.util.Date.from(
-                                    end.atZone(ZoneId.systemDefault()).toInstant()
-                                )
-                            ),
-                            "lastHeartbeatAt" to FieldValue.serverTimestamp()
-                        )
-                        if (!hasStarted) {
-                            patch["startsAt"] = com.google.firebase.Timestamp(
-                                java.util.Date.from(
-                                    start.atZone(ZoneId.systemDefault()).toInstant()
-                                )
-                            )
-                        }
-                        onSave(patch)
-                    },
-                    enabled = endAfterStart && endAfterNowIfActive && name.trim().length in 3..30,
-                    modifier = Modifier.weight(1f)
-                ) { Text("Save") }
-            }
-
-            Spacer(Modifier.height(8.dp))
-            if (hasStarted) {
-                Text(
-                    "Start time locked because the run has already started.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
+    InvitePlayerDialog(
+        visible = showInviteDialog,
+        run = run,
+        uid = uid,
+        db = db,
+        onDismiss = { showInviteDialog = false }
+    )
 }

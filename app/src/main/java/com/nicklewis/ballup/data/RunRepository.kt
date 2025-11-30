@@ -3,9 +3,9 @@ package com.nicklewis.ballup.data
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.nicklewis.ballup.model.Run
-import kotlinx.coroutines.tasks.await
 import com.nicklewis.ballup.model.RunAccess
-
+import com.nicklewis.ballup.model.Team
+import kotlinx.coroutines.tasks.await
 
 /** Transactional JOIN: prevents double-join and overfilling. */
 suspend fun joinRun(db: FirebaseFirestore, runId: String, uid: String) {
@@ -185,5 +185,102 @@ suspend fun cancelJoinRequest(
     }.await()
 }
 
+/**
+ * Host bulk-invites a squad into a run.
+ *
+ * Behavior:
+ * - Only the host can call this.
+ * - OPEN + INVITE_ONLY → members are added directly to playerIds (up to maxPlayers).
+ * - HOST_APPROVAL → creates pending joinRequests for each member.
+ */
+suspend fun inviteSquadToRun(
+    db: FirebaseFirestore,
+    runId: String,
+    requesterUid: String,
+    team: Team
+) {
+    val runRef = db.collection("runs").document(runId)
 
+    db.runTransaction { tx ->
+        val runSnap = tx.get(runRef)
+        if (!runSnap.exists()) throw IllegalStateException("Run not found")
 
+        val run = runSnap.toObject(Run::class.java)
+            ?: throw IllegalStateException("Run not found")
+
+        // Only host can invite squads
+        if (run.hostId != requesterUid) {
+            throw IllegalStateException("Only host can invite squads")
+        }
+
+        if (run.status !in listOf("active", "scheduled")) {
+            throw IllegalStateException("This run has ended")
+        }
+
+        val access = runSnap.getString("access") ?: RunAccess.OPEN.name
+        val maxPlayers = run.maxPlayers.takeIf { it > 0 } ?: 10
+
+        val currentPlayers = (run.playerIds ?: emptyList()).toMutableList()
+        val currentSet = currentPlayers.toSet()
+
+        val teamMembers = team.memberUids.toSet()
+
+        // remove anyone already in the run
+        val newMembers = teamMembers - currentSet
+
+        if (newMembers.isEmpty()) {
+            return@runTransaction null
+        }
+
+        when (access) {
+            RunAccess.HOST_APPROVAL.name -> {
+                // create pending joinRequests for each member
+                newMembers.forEach { memberUid ->
+                    val reqRef = runRef.collection("joinRequests").document(memberUid)
+                    val existing = tx.get(reqRef)
+                    if (!existing.exists() || existing.getString("status") != "pending") {
+                        tx.set(
+                            reqRef,
+                            mapOf(
+                                "uid"       to memberUid,
+                                "status"    to "pending",
+                                "createdAt" to FieldValue.serverTimestamp()
+                            )
+                        )
+                        tx.update(
+                            runRef,
+                            mapOf("pendingJoinsCount" to FieldValue.increment(1))
+                        )
+                    }
+                }
+            }
+
+            RunAccess.OPEN.name,
+            RunAccess.INVITE_ONLY.name -> {
+                // treat host squad invite as direct approval; obey maxPlayers
+                val availableSlots = maxPlayers - currentPlayers.size
+                if (availableSlots <= 0) {
+                    // run is full, nothing to add
+                    return@runTransaction null
+                }
+                val toAdd = newMembers.take(availableSlots)
+                currentPlayers += toAdd
+                tx.update(
+                    runRef,
+                    mapOf(
+                        "playerIds" to currentPlayers,
+                        "playerCount" to currentPlayers.size,
+                        "lastHeartbeatAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }
+
+            else -> {
+                // unknown access mode → default to no-op
+                return@runTransaction null
+            }
+        }
+
+        null
+    }.await()
+}

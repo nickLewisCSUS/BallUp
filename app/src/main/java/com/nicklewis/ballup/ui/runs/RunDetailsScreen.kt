@@ -22,6 +22,7 @@ import com.nicklewis.ballup.data.joinRun
 import com.nicklewis.ballup.data.leaveRun
 import com.nicklewis.ballup.data.requestJoinRun
 import com.nicklewis.ballup.model.RunAccess
+import com.nicklewis.ballup.model.Team
 import com.nicklewis.ballup.util.openDirections
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -30,11 +31,19 @@ import kotlinx.coroutines.tasks.await
 @Composable
 fun RunDetailsScreen(
     runId: String,
-    onBack: (() -> Unit)? = null
+    onBack: (() -> Unit)? = null,
+    viewModel: RunDetailsViewModel
 ) {
     val db = remember { FirebaseFirestore.getInstance() }
     val uid = remember { FirebaseAuth.getInstance().currentUser?.uid }
     val scope = rememberCoroutineScope()
+
+    // 🔹 Squads state from ViewModel
+    val uiState by viewModel.uiState.collectAsState()
+    val ownedTeams = uiState.ownedTeams
+    val squadError = uiState.errorMessage
+
+    var showSquadSheet by remember { mutableStateOf(false) }
 
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -59,7 +68,7 @@ fun RunDetailsScreen(
     // invited players (for INVITE_ONLY)
     var invitedProfiles by remember { mutableStateOf<Map<String, PlayerProfile>>(emptyMap()) }
 
-    // invite dialog visibility
+    // invite dialog visibility (single-player invite)
     var showInviteDialog by remember { mutableStateOf(false) }
 
     // current viewer's join request status (pending/approved/denied)
@@ -385,7 +394,7 @@ fun RunDetailsScreen(
                                 )
                             } else if (statusLabel in listOf("Active", "Scheduled")) {
                                 Text(
-                                    "Full",
+                                    text = "Full",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.secondary
                                 )
@@ -742,99 +751,26 @@ fun RunDetailsScreen(
                     var ending by remember { mutableStateOf(false) }
                     var showCancelConfirm by remember { mutableStateOf(false) }
 
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        if (!isMember) {
-                            val canAct =
-                                statusLabel in listOf("Active", "Scheduled") && uid != null
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            if (!isMember) {
+                                val canAct =
+                                    statusLabel in listOf("Active", "Scheduled") && uid != null
 
-                            when (accessEnum) {
-                                RunAccess.OPEN -> {
-                                    val canJoin =
-                                        canAct && openSlots > 0
-                                    Button(
-                                        onClick = {
-                                            if (!canJoin) return@Button
-                                            joining = true
-                                            scope.launch {
-                                                try {
-                                                    joinRun(db, runId, uid!!)
-                                                } catch (e: Exception) {
-                                                    Log.e("RunDetails", "joinRun failed", e)
-                                                } finally {
-                                                    joining = false
-                                                }
-                                            }
-                                        },
-                                        enabled = canJoin && !joining,
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .heightIn(min = 44.dp)
-                                    ) {
-                                        Text(if (joining) "Joining…" else "Join Run")
-                                    }
-                                }
-
-                                RunAccess.HOST_APPROVAL -> {
-                                    when {
-                                        !canAct -> {
-                                            OutlinedButton(
-                                                onClick = {},
-                                                enabled = false,
-                                                modifier = Modifier
-                                                    .weight(1f)
-                                                    .heightIn(min = 44.dp)
-                                            ) {
-                                                Text("Request to join")
-                                            }
-                                        }
-
-                                        hasPendingRequestFromMe -> {
-                                            OutlinedButton(
-                                                onClick = {},
-                                                enabled = false,
-                                                modifier = Modifier
-                                                    .weight(1f)
-                                                    .heightIn(min = 44.dp)
-                                            ) {
-                                                Text("Request sent")
-                                            }
-                                        }
-
-                                        else -> {
-                                            Button(
-                                                onClick = {
-                                                    if (!canAct) return@Button
-                                                    requesting = true
-                                                    scope.launch {
-                                                        try {
-                                                            requestJoinRun(db, runId, uid!!)
-                                                        } catch (e: Exception) {
-                                                            Log.e("RunDetails", "requestJoinRun failed", e)
-                                                        } finally {
-                                                            requesting = false
-                                                        }
-                                                    }
-                                                },
-                                                enabled = !requesting,
-                                                modifier = Modifier
-                                                    .weight(1f)
-                                                    .heightIn(min = 44.dp)
-                                            ) {
-                                                Text(if (requesting) "Requesting…" else "Request to join")
-                                            }
-                                        }
-                                    }
-                                }
-
-                                RunAccess.INVITE_ONLY -> {
-                                    if (isAllowedForInviteOnly && canAct && openSlots > 0) {
+                                when (accessEnum) {
+                                    RunAccess.OPEN -> {
+                                        val canJoin =
+                                            canAct && openSlots > 0
                                         Button(
                                             onClick = {
-                                                if (!canAct) return@Button
+                                                if (!canJoin) return@Button
                                                 joining = true
                                                 scope.launch {
                                                     try {
@@ -846,79 +782,169 @@ fun RunDetailsScreen(
                                                     }
                                                 }
                                             },
-                                            enabled = !joining,
+                                            enabled = canJoin && !joining,
                                             modifier = Modifier
                                                 .weight(1f)
                                                 .heightIn(min = 44.dp)
                                         ) {
                                             Text(if (joining) "Joining…" else "Join Run")
                                         }
-                                    } else {
-                                        OutlinedButton(
-                                            onClick = {},
-                                            enabled = false,
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .heightIn(min = 44.dp)
-                                        ) {
-                                            Text("Invite only")
+                                    }
+
+                                    RunAccess.HOST_APPROVAL -> {
+                                        when {
+                                            !canAct -> {
+                                                OutlinedButton(
+                                                    onClick = {},
+                                                    enabled = false,
+                                                    modifier = Modifier
+                                                        .weight(1f)
+                                                        .heightIn(min = 44.dp)
+                                                ) {
+                                                    Text("Request to join")
+                                                }
+                                            }
+
+                                            hasPendingRequestFromMe -> {
+                                                OutlinedButton(
+                                                    onClick = {},
+                                                    enabled = false,
+                                                    modifier = Modifier
+                                                        .weight(1f)
+                                                        .heightIn(min = 44.dp)
+                                                ) {
+                                                    Text("Request sent")
+                                                }
+                                            }
+
+                                            else -> {
+                                                Button(
+                                                    onClick = {
+                                                        if (!canAct) return@Button
+                                                        requesting = true
+                                                        scope.launch {
+                                                            try {
+                                                                requestJoinRun(db, runId, uid!!)
+                                                            } catch (e: Exception) {
+                                                                Log.e("RunDetails", "requestJoinRun failed", e)
+                                                            } finally {
+                                                                requesting = false
+                                                            }
+                                                        }
+                                                    },
+                                                    enabled = !requesting,
+                                                    modifier = Modifier
+                                                        .weight(1f)
+                                                        .heightIn(min = 44.dp)
+                                                ) {
+                                                    Text(if (requesting) "Requesting…" else "Request to join")
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    RunAccess.INVITE_ONLY -> {
+                                        if (isAllowedForInviteOnly && canAct && openSlots > 0) {
+                                            Button(
+                                                onClick = {
+                                                    if (!canAct) return@Button
+                                                    joining = true
+                                                    scope.launch {
+                                                        try {
+                                                            joinRun(db, runId, uid!!)
+                                                        } catch (e: Exception) {
+                                                            Log.e("RunDetails", "joinRun failed", e)
+                                                        } finally {
+                                                            joining = false
+                                                        }
+                                                    }
+                                                },
+                                                enabled = !joining,
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .heightIn(min = 44.dp)
+                                            ) {
+                                                Text(if (joining) "Joining…" else "Join Run")
+                                            }
+                                        } else {
+                                            OutlinedButton(
+                                                onClick = {},
+                                                enabled = false,
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .heightIn(min = 44.dp)
+                                            ) {
+                                                Text("Invite only")
+                                            }
                                         }
                                     }
                                 }
-                            }
-                        } else if (isHost) {
-                            OutlinedButton(
-                                onClick = {
-                                    if (!ending && statusLabel in listOf("Active", "Scheduled")) {
-                                        showCancelConfirm = true
-                                    }
-                                },
-                                enabled = !ending && statusLabel in listOf("Active", "Scheduled"),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .heightIn(min = 44.dp)
-                            ) {
-                                Text("Cancel Run")
-                            }
-                        } else {
-                            OutlinedButton(
-                                onClick = {
-                                    if (uid == null) return@OutlinedButton
-                                    leaving = true
-                                    scope.launch {
-                                        try {
-                                            leaveRun(db, runId, uid)
-                                        } catch (e: Exception) {
-                                            Log.e("RunDetails", "leaveRun failed", e)
-                                        } finally {
-                                            leaving = false
+                            } else if (isHost) {
+                                OutlinedButton(
+                                    onClick = {
+                                        if (!ending && statusLabel in listOf("Active", "Scheduled")) {
+                                            showCancelConfirm = true
                                         }
+                                    },
+                                    enabled = !ending && statusLabel in listOf("Active", "Scheduled"),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .heightIn(min = 44.dp)
+                                ) {
+                                    Text("Cancel Run")
+                                }
+                            } else {
+                                OutlinedButton(
+                                    onClick = {
+                                        if (uid == null) return@OutlinedButton
+                                        leaving = true
+                                        scope.launch {
+                                            try {
+                                                leaveRun(db, runId, uid)
+                                            } catch (e: Exception) {
+                                                Log.e("RunDetails", "leaveRun failed", e)
+                                            } finally {
+                                                leaving = false
+                                            }
+                                        }
+                                    },
+                                    enabled = !leaving,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .heightIn(min = 44.dp)
+                                ) {
+                                    Text(if (leaving) "Leaving…" else "Leave Run")
+                                }
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    val lat = courtLat
+                                    val lng = courtLng
+                                    val name = courtName ?: "Court"
+                                    if (lat != null && lng != null) {
+                                        openDirections(ctx, lat, lng, name)
                                     }
                                 },
-                                enabled = !leaving,
+                                enabled = courtLat != null && courtLng != null,
                                 modifier = Modifier
                                     .weight(1f)
                                     .heightIn(min = 44.dp)
                             ) {
-                                Text(if (leaving) "Leaving…" else "Leave Run")
+                                Text("Directions")
                             }
                         }
 
-                        OutlinedButton(
-                            onClick = {
-                                val lat = courtLat
-                                val lng = courtLng
-                                val name = courtName ?: "Court"
-                                if (lat != null && lng != null) {
-                                    openDirections(ctx, lat, lng, name)
-                                }
-                            },
-                            enabled = courtLat != null && courtLng != null,
-                            modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 44.dp)
-                        ) {
-                            Text("Directions")
+                        // 🔹 Host-only "Invite squad" button
+                        if (isHost && ownedTeams.isNotEmpty() && statusLabel in listOf("Active", "Scheduled")) {
+                            OutlinedButton(
+                                onClick = { showSquadSheet = true },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 44.dp)
+                            ) {
+                                Text("Invite squad")
+                            }
                         }
                     }
 
@@ -1013,7 +1039,104 @@ fun RunDetailsScreen(
         visible = showInviteDialog,
         run = run,
         uid = uid,
-        db = db,
+        db = FirebaseFirestore.getInstance(),
         onDismiss = { showInviteDialog = false }
     )
+
+    // 🔹 Squad bottom sheet
+    if (showSquadSheet) {
+        ModalBottomSheet(
+            onDismissRequest = {
+                showSquadSheet = false
+                viewModel.clearError()
+            }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Invite squad to this run",
+                    style = MaterialTheme.typography.titleMedium
+                )
+
+                if (ownedTeams.isEmpty()) {
+                    Text(
+                        text = "You don’t have any squads yet. Create one from the Squads tab.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    ownedTeams.forEach { team: Team ->
+                        Surface(
+                            tonalElevation = 1.dp,
+                            shape = MaterialTheme.shapes.medium,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(
+                                        text = team.name.ifBlank { "Unnamed squad" },
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = "${team.memberUids.size} players",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+
+                                TextButton(
+                                    onClick = {
+                                        scope.launch {
+                                            try {
+                                                viewModel.inviteSquad(team)
+                                                showSquadSheet = false
+                                            } catch (e: Exception) {
+                                                // viewModel already sets errorMessage
+                                            }
+                                        }
+                                    }
+                                ) {
+                                    Text("Invite")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (squadError != null) {
+                    Text(
+                        text = squadError,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                TextButton(
+                    onClick = {
+                        showSquadSheet = false
+                        viewModel.clearError()
+                    },
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text("Close")
+                }
+            }
+        }
+    }
 }

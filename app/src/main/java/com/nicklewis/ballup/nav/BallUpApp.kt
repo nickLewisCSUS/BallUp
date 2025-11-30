@@ -21,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -32,6 +33,8 @@ import com.nicklewis.ballup.ui.courts.CourtsListScreen
 import com.nicklewis.ballup.ui.courts.components.AddCourtDialog
 import com.nicklewis.ballup.ui.map.CourtsMapScreen
 import com.nicklewis.ballup.ui.runs.RunDetailsScreen
+import com.nicklewis.ballup.ui.runs.RunDetailsViewModel
+import com.nicklewis.ballup.ui.runs.RunDetailsViewModelFactory
 import com.nicklewis.ballup.ui.settings.EditProfileScreen
 import com.nicklewis.ballup.ui.settings.NotificationSettingsScreen
 import com.nicklewis.ballup.ui.settings.SettingsScreen
@@ -128,11 +131,22 @@ fun BallUpApp(
                     CourtsListScreen()
                 }
 
-                // 🔹 NEW Squads/Teams tab route
                 composable(Screen.Teams.route) {
                     TeamsScreen(
-                        onBackToMap = { nav.navigate(Screen.Map.route) },
-                        onOpenSettings = { nav.navigate(Screen.Settings.route) }
+                        onBackToMap = {
+                            nav.navigate(Screen.Map.route) {
+                                popUpTo(nav.graph.startDestinationId) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        onOpenSettings = {
+                            nav.navigate(Screen.Settings.route) {
+                                popUpTo(nav.graph.startDestinationId) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        }
                     )
                 }
 
@@ -159,9 +173,14 @@ fun BallUpApp(
                     arguments = listOf(navArgument("runId") { type = NavType.StringType })
                 ) { backStackEntry ->
                     val runId = backStackEntry.arguments?.getString("runId")!!
+                    val vm: RunDetailsViewModel = viewModel(
+                        factory = RunDetailsViewModelFactory(runId)
+                    )
+
                     RunDetailsScreen(
                         runId = runId,
-                        onBack = { nav.popBackStack() }
+                        onBack = { nav.popBackStack() },
+                        viewModel = vm
                     )
                 }
             }

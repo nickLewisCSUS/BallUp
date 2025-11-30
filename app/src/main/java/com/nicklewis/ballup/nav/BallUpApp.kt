@@ -1,5 +1,6 @@
 package com.nicklewis.ballup.nav
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -21,19 +22,20 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.nicklewis.ballup.ui.courts.components.AddCourtDialog
-import com.nicklewis.ballup.ui.courts.CourtsListScreen
-import com.nicklewis.ballup.ui.map.CourtsMapScreen
-import com.nicklewis.ballup.ui.settings.SettingsScreen
-import androidx.navigation.NavType
 import androidx.navigation.navArgument
+import com.nicklewis.ballup.ui.courts.CourtsListScreen
+import com.nicklewis.ballup.ui.courts.components.AddCourtDialog
+import com.nicklewis.ballup.ui.map.CourtsMapScreen
 import com.nicklewis.ballup.ui.runs.RunDetailsScreen
 import com.nicklewis.ballup.ui.settings.EditProfileScreen
 import com.nicklewis.ballup.ui.settings.NotificationSettingsScreen
+import com.nicklewis.ballup.ui.settings.SettingsScreen
+import com.nicklewis.ballup.ui.teams.TeamsScreen   // 👈 NEW
 
 const val ROUTE_RUN = "run/{runId}"
 
@@ -43,7 +45,10 @@ fun BallUpApp(
     onSignOut: () -> Unit
 ) {
     val nav = rememberNavController()
-    val items = listOf(Screen.Map, Screen.List, Screen.Settings)
+
+    // 🔹 Now includes Teams/Squads
+    val items = listOf(Screen.Map, Screen.List, Screen.Teams, Screen.Settings)
+
     var showAddCourt by remember { mutableStateOf(false) }
     var showIndoor by rememberSaveable { mutableStateOf(true) }
     var showOutdoor by rememberSaveable { mutableStateOf(true) }
@@ -57,10 +62,12 @@ fun BallUpApp(
             }
         }
     }
+
     Scaffold(
         topBar = {
             val title = when (currentRoute(nav)) {
                 Screen.List.route     -> "BallUp — Courts"
+                Screen.Teams.route    -> "BallUp — Squads"      // 👈 NEW title
                 Screen.Settings.route -> "BallUp — Settings"
                 else                  -> "BallUp — Map"
             }
@@ -95,7 +102,7 @@ fun BallUpApp(
             }
         }
     ) { padding ->
-        androidx.compose.foundation.layout.Box(
+        Box(
             Modifier
                 .fillMaxSize()
                 .padding(padding)
@@ -121,6 +128,14 @@ fun BallUpApp(
                     CourtsListScreen()
                 }
 
+                // 🔹 NEW Squads/Teams tab route
+                composable(Screen.Teams.route) {
+                    TeamsScreen(
+                        onBackToMap = { nav.navigate(Screen.Map.route) },
+                        onOpenSettings = { nav.navigate(Screen.Settings.route) }
+                    )
+                }
+
                 composable(Screen.Settings.route) {
                     SettingsScreen(
                         onEditProfile = { nav.navigate("editProfile") },
@@ -129,7 +144,6 @@ fun BallUpApp(
                     )
                 }
 
-                // 🔹 New Edit Profile route
                 composable("editProfile") {
                     EditProfileScreen(
                         onBack = { nav.popBackStack() }
@@ -145,9 +159,13 @@ fun BallUpApp(
                     arguments = listOf(navArgument("runId") { type = NavType.StringType })
                 ) { backStackEntry ->
                     val runId = backStackEntry.arguments?.getString("runId")!!
-                    RunDetailsScreen(runId = runId, onBack = { nav.popBackStack() })
+                    RunDetailsScreen(
+                        runId = runId,
+                        onBack = { nav.popBackStack() }
+                    )
                 }
             }
+
             InAppAlertsOverlay(nav)
         }
     }

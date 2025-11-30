@@ -62,6 +62,15 @@ fun RunDetailsScreen(
     var pendingRequests by remember { mutableStateOf<List<JoinRequestDoc>>(emptyList()) }
     var pendingProfiles by remember { mutableStateOf<Map<String, PlayerProfile>>(emptyMap()) }
 
+    // invited players (for INVITE_ONLY)
+    var invitedProfiles by remember { mutableStateOf<Map<String, PlayerProfile>>(emptyMap()) }
+
+    // invite dialog state
+    var showInviteDialog by remember { mutableStateOf(false) }
+    var inviteUsername by remember { mutableStateOf("") }
+    var inviteBusy by remember { mutableStateOf(false) }
+    var inviteError by remember { mutableStateOf<String?>(null) }
+
     // current viewer's join request status (pending/approved/denied)
     var myRequestStatus by remember { mutableStateOf<String?>(null) }
 
@@ -164,7 +173,6 @@ fun RunDetailsScreen(
     LaunchedEffect(run, uid) {
         val r = run ?: return@LaunchedEffect
         val me = uid
-        val hostUidForSort = r.hostUid ?: r.hostId
 
         isMember = when {
             me == null -> false
@@ -221,6 +229,25 @@ fun RunDetailsScreen(
             }
         }
         pendingProfiles = map
+    }
+
+    // ----- invited profiles lookup (INVITE_ONLY) -----
+    LaunchedEffect(run?.allowedUids?.sorted()?.joinToString(",")) {
+        val r = run ?: return@LaunchedEffect
+        val ids = r.allowedUids
+        if (ids.isEmpty()) {
+            invitedProfiles = emptyMap()
+            return@LaunchedEffect
+        }
+
+        val map = mutableMapOf<String, PlayerProfile>()
+        for (id in ids) {
+            val profile = lookupUserProfile(db, id)
+            if (profile != null) {
+                map[id] = profile
+            }
+        }
+        invitedProfiles = map
     }
 
     // ----- UI -----
@@ -375,6 +402,15 @@ fun RunDetailsScreen(
                         }
                     }
 
+                    // Invited user banner
+                    if (!isHost && accessEnum == RunAccess.INVITE_ONLY && isAllowedForInviteOnly) {
+                        Text(
+                            text = "You were invited to this run",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
                     // Notice when run is ended/cancelled
                     if (statusLabel in listOf("Cancelled", "Ended")) {
                         Text(
@@ -452,6 +488,91 @@ fun RunDetailsScreen(
                                             )
                                         }
                                     }
+                                }
+                            }
+                        }
+                    }
+
+                    // --- Invited players (host-only, invite-only) ---
+                    if (isHost && accessEnum == RunAccess.INVITE_ONLY) {
+                        Text("Invited players", style = MaterialTheme.typography.titleMedium)
+                        Surface(
+                            tonalElevation = 1.dp,
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                if (r.allowedUids.isEmpty()) {
+                                    Text(
+                                        text = "No invited players yet.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                } else {
+                                    r.allowedUids.forEach { invitedUid ->
+                                        val profile = invitedProfiles[invitedUid]
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(
+                                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Text(
+                                                    text = profile?.username ?: invitedUid,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                                val tags = listOfNotNull(
+                                                    profile?.skillLevel,
+                                                    profile?.playStyle,
+                                                    profile?.heightBracket
+                                                )
+                                                if (tags.isNotEmpty()) {
+                                                    Text(
+                                                        text = tags.joinToString(" • "),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                            }
+
+                                            TextButton(
+                                                onClick = {
+                                                    scope.launch {
+                                                        try {
+                                                            r.ref.update(
+                                                                "allowedUids",
+                                                                FieldValue.arrayRemove(invitedUid)
+                                                            ).await()
+                                                        } catch (e: Exception) {
+                                                            Log.e("RunDetails", "remove invite failed", e)
+                                                        }
+                                                    }
+                                                }
+                                            ) {
+                                                Text("Remove")
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Spacer(Modifier.height(4.dp))
+
+                                OutlinedButton(
+                                    onClick = {
+                                        inviteUsername = ""
+                                        inviteError = null
+                                        showInviteDialog = true
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Invite player")
                                 }
                             }
                         }
@@ -898,6 +1019,117 @@ fun RunDetailsScreen(
                 }
             }
         }
+    }
+
+    // ---- Invite dialog (host, invite-only) ----
+    val currentRun = run
+    if (showInviteDialog && currentRun != null && isHost) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!inviteBusy) {
+                    showInviteDialog = false
+                    inviteError = null
+                }
+            },
+            title = { Text("Invite player") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Enter the username of the player you want to invite.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedTextField(
+                        value = inviteUsername,
+                        onValueChange = {
+                            inviteUsername = it.trim().take(32)
+                            inviteError = null
+                        },
+                        label = { Text("Username") },
+                        singleLine = true,
+                        isError = inviteError != null,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (inviteError != null) {
+                        Text(
+                            text = inviteError ?: "",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = inviteUsername.isNotBlank() && !inviteBusy,
+                    onClick = {
+                        if (inviteUsername.isBlank()) return@TextButton
+                        inviteBusy = true
+                        val usernameToFind = inviteUsername
+                        val runRef = currentRun.ref
+                        scope.launch {
+                            try {
+                                inviteError = null
+                                // Look up user by username
+                                val snap = db.collection("users")
+                                    .whereEqualTo("username", usernameToFind)
+                                    .limit(1)
+                                    .get()
+                                    .await()
+
+                                if (snap.isEmpty) {
+                                    inviteError = "No user found with that username."
+                                } else {
+                                    val doc = snap.documents.first()
+                                    val invitedUid = doc.id
+
+                                    if (invitedUid == uid) {
+                                        inviteError = "You’re already in this run."
+                                    } else if (currentRun.allowedUids.contains(invitedUid)) {
+                                        inviteError = "This user is already invited."
+                                    } else if (currentRun.playerIds.contains(invitedUid)) {
+                                        inviteError = "This user is already playing."
+                                    } else {
+                                        runRef.update(
+                                            "allowedUids",
+                                            FieldValue.arrayUnion(invitedUid)
+                                        ).await()
+                                        // Success → close dialog
+                                        showInviteDialog = false
+                                        inviteUsername = ""
+                                        inviteError = null
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e("RunDetails", "invite user failed", e)
+                                inviteError = "Failed to send invite. Try again."
+                            } finally {
+                                inviteBusy = false
+                            }
+                        }
+                    }
+                ) {
+                    if (inviteBusy) {
+                        CircularProgressIndicator(
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    } else {
+                        Text("Invite")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !inviteBusy,
+                    onClick = {
+                        showInviteDialog = false
+                        inviteError = null
+                    }
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 

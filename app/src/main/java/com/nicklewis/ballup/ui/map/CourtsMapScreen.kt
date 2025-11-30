@@ -41,9 +41,11 @@ import com.google.firebase.firestore.ktx.toObject
 import com.nicklewis.ballup.data.CourtLite
 import com.nicklewis.ballup.firebase.joinRun
 import com.nicklewis.ballup.firebase.leaveRun
+import com.nicklewis.ballup.firebase.requestJoinRun
 import com.nicklewis.ballup.map.MapCameraVM
 import com.nicklewis.ballup.model.Court
 import com.nicklewis.ballup.model.Run
+import com.nicklewis.ballup.model.RunAccess
 import com.nicklewis.ballup.ui.courts.components.StartRunDialog
 import com.nicklewis.ballup.ui.runs.RunsViewModel
 import com.nicklewis.ballup.util.centerOnLastKnown
@@ -504,21 +506,99 @@ fun CourtsMapScreen(
                                             (currentRun.playerIds?.contains(uid) == true)
                                     val isHost = uid != null && currentRun.hostId == uid
 
+                                    // NEW: access-aware behavior
+                                    val accessEnum = try {
+                                        RunAccess.valueOf(
+                                            currentRun.access ?: RunAccess.OPEN.name
+                                        )
+                                    } catch (_: IllegalArgumentException) {
+                                        RunAccess.OPEN
+                                    }
+
+                                    val allowedUids = currentRun.allowedUids ?: emptyList()
+                                    val isAllowedForInviteOnly =
+                                        uid != null && allowedUids.contains(uid)
+
+                                    val openSlots =
+                                        (currentRun.maxPlayers - currentRun.playerCount)
+                                            .coerceAtLeast(0)
+                                    val canAct = uid != null && openSlots > 0
+
                                     if (!alreadyIn) {
-                                        Button(
-                                            onClick = {
-                                                if (uid != null) {
-                                                    scope.launch {
-                                                        try {
-                                                            joinRun(db, runId, uid)
-                                                        } catch (e: Exception) {
-                                                            Log.e("JOIN", "Failed", e)
+                                        when (accessEnum) {
+                                            RunAccess.OPEN -> {
+                                                val canJoin = canAct
+                                                Button(
+                                                    onClick = {
+                                                        if (!canJoin || uid == null) return@Button
+                                                        scope.launch {
+                                                            try {
+                                                                joinRun(db, runId, uid)
+                                                            } catch (e: Exception) {
+                                                                Log.e("JOIN", "Failed", e)
+                                                            }
                                                         }
+                                                    },
+                                                    enabled = canJoin,
+                                                    modifier = Modifier.weight(1f)
+                                                ) {
+                                                    Text(if (openSlots > 0) "Join" else "Full")
+                                                }
+                                            }
+
+                                            RunAccess.HOST_APPROVAL -> {
+                                                Button(
+                                                    onClick = {
+                                                        if (!canAct || uid == null) return@Button
+                                                        scope.launch {
+                                                            try {
+                                                                requestJoinRun(db, runId, uid)
+                                                            } catch (e: Exception) {
+                                                                Log.e("JOIN_REQ", "Failed", e)
+                                                            }
+                                                        }
+                                                    },
+                                                    enabled = canAct,
+                                                    modifier = Modifier.weight(1f)
+                                                ) {
+                                                    Text(
+                                                        if (openSlots > 0)
+                                                            "Request to join"
+                                                        else
+                                                            "Full"
+                                                    )
+                                                }
+                                            }
+
+                                            RunAccess.INVITE_ONLY -> {
+                                                if (isAllowedForInviteOnly && canAct) {
+                                                    Button(
+                                                        onClick = {
+                                                            if (!canAct || uid == null) return@Button
+                                                            scope.launch {
+                                                                try {
+                                                                    joinRun(db, runId, uid)
+                                                                } catch (e: Exception) {
+                                                                    Log.e("JOIN", "Failed", e)
+                                                                }
+                                                            }
+                                                        },
+                                                        enabled = canAct,
+                                                        modifier = Modifier.weight(1f)
+                                                    ) {
+                                                        Text("Join")
+                                                    }
+                                                } else {
+                                                    OutlinedButton(
+                                                        onClick = {},
+                                                        enabled = false,
+                                                        modifier = Modifier.weight(1f)
+                                                    ) {
+                                                        Text("Invite only")
                                                     }
                                                 }
-                                            },
-                                            modifier = Modifier.weight(1f)
-                                        ) { Text("Join") }
+                                            }
+                                        }
                                     } else if (!isHost) {
                                         // Regular player can leave
                                         OutlinedButton(

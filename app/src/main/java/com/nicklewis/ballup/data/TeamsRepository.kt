@@ -17,9 +17,19 @@ class TeamsRepository(
     private fun uidOrThrow(): String =
         auth.currentUser?.uid ?: error("Not signed in")
 
+    // --- helper to map a document to Team safely ---
+    private fun mapTeam(doc: com.google.firebase.firestore.DocumentSnapshot): Team {
+        return Team(
+            id = doc.id,
+            name = doc.getString("name") ?: "",
+            ownerUid = doc.getString("ownerUid") ?: "",
+            memberUids = doc.get("memberUids") as? List<String> ?: emptyList(),
+            createdAt = doc.getTimestamp("createdAt")
+        )
+    }
+
     /**
      * Live list of teams where the user is the owner.
-     * (Kept for compatibility if other parts of the app use it.)
      */
     fun getOwnedTeams(): Flow<List<Team>> = callbackFlow {
         val uid = uidOrThrow()
@@ -30,7 +40,9 @@ class TeamsRepository(
                     close(err)
                     return@addSnapshotListener
                 }
-                val teams = snap?.toObjects(Team::class.java).orEmpty()
+                val teams = snap?.documents
+                    ?.map { doc -> mapTeam(doc) }
+                    .orEmpty()
                 trySend(teams)
             }
 
@@ -49,8 +61,57 @@ class TeamsRepository(
                     close(err)
                     return@addSnapshotListener
                 }
-                val teams = snap?.toObjects(Team::class.java).orEmpty()
+                val teams = snap?.documents
+                    ?.map { doc -> mapTeam(doc) }
+                    .orEmpty()
                 trySend(teams)
+            }
+
+        awaitClose { reg.remove() }
+    }
+
+    /**
+     * Squads to show in the "Find squads" tab.
+     * Simple version: all squads where I'm NOT already a member.
+     */
+    fun getDiscoverableTeams(): Flow<List<Team>> = callbackFlow {
+        val uid = uidOrThrow()
+        val reg = db.collection("teams")
+            .addSnapshotListener { snap, err ->
+                if (err != null) {
+                    close(err)
+                    return@addSnapshotListener
+                }
+                val all = snap?.documents
+                    ?.map { doc -> mapTeam(doc) }
+                    .orEmpty()
+                val filtered = all.filter { team ->
+                    !team.memberUids.contains(uid)
+                }
+                trySend(filtered)
+            }
+
+        awaitClose { reg.remove() }
+    }
+
+    /**
+     * Track which squads this user has already requested to join.
+     * Returns teamIds with a pending request.
+     */
+    fun getPendingJoinRequestsForCurrentUser(): Flow<List<String>> = callbackFlow {
+        val uid = uidOrThrow()
+        val reg = db.collection("teamJoinRequests")
+            .whereEqualTo("uid", uid)
+            .whereEqualTo("status", "pending")
+            .addSnapshotListener { snap, err ->
+                if (err != null) {
+                    close(err)
+                    return@addSnapshotListener
+                }
+                val ids = snap?.documents
+                    ?.mapNotNull { it.getString("teamId") }
+                    .orEmpty()
+                trySend(ids)
             }
 
         awaitClose { reg.remove() }
@@ -63,6 +124,7 @@ class TeamsRepository(
         val uid = uidOrThrow()
         val ref = db.collection("teams").document()
         val data = mapOf(
+            // REMOVE: "id" to ref.id,
             "name" to name,
             "ownerUid" to uid,
             "memberUids" to listOf(uid),
@@ -141,5 +203,155 @@ class TeamsRepository(
         return snaps.mapNotNull { snap ->
             snap.toObject(UserProfile::class.java)
         }
+    }
+
+    /**
+     * Player → request to join a squad.
+     * (We allow multiple docs for same teamId+uid for now; could de-dupe later.)
+     */
+    suspend fun requestToJoinTeam(teamId: String, uid: String) {
+        val ref = db.collection("teamJoinRequests").document()
+        val data = mapOf(
+            "teamId" to teamId,
+            "uid" to uid,
+            "status" to "pending",
+            "createdAt" to com.google.firebase.Timestamp.now()
+        )
+        ref.set(data).await()
+    }
+
+    /**
+     * Player → cancel their pending join request for this squad.
+     */
+    suspend fun cancelJoinRequest(teamId: String, uid: String) {
+        val snap = db.collection("teamJoinRequests")
+            .whereEqualTo("teamId", teamId)
+            .whereEqualTo("uid", uid)
+            .whereEqualTo("status", "pending")
+            .limit(1)
+            .get()
+            .await()
+
+        val doc = snap.documents.firstOrNull()?.reference ?: return
+        doc.delete().await()
+    }
+
+    /**
+     * Non-owner member leaves squad.
+     */
+    suspend fun leaveTeam(teamId: String, uid: String) {
+        val ref = db.collection("teams").document(teamId)
+
+        db.runTransaction { tx ->
+            val snap = tx.get(ref)
+            if (!snap.exists()) throw IllegalStateException("Squad not found")
+
+            val ownerUid = snap.getString("ownerUid") ?: ""
+            if (uid == ownerUid) {
+                throw IllegalStateException("Owner cannot leave their own squad")
+            }
+
+            val members = snap.get("memberUids") as? List<String> ?: emptyList()
+            val newMembers = members.filterNot { it == uid }
+            tx.update(ref, "memberUids", newMembers)
+        }.await()
+    }
+
+    // -------- Host approval helpers --------
+
+    data class PendingTeamRequest(
+        val uid: String,
+        val profile: UserProfile?
+    )
+
+    /**
+     * Owner: load pending join requests for a given team.
+     * Returns list of (uid + UserProfile?).
+     */
+    suspend fun getPendingRequestsForTeam(teamId: String): List<PendingTeamRequest> {
+        val requestsSnap = db.collection("teamJoinRequests")
+            .whereEqualTo("teamId", teamId)
+            .whereEqualTo("status", "pending")
+            .get()
+            .await()
+
+        val uids = requestsSnap.documents
+            .mapNotNull { it.getString("uid") }
+            .distinct()
+
+        if (uids.isEmpty()) return emptyList()
+
+        val profiles = getMembers(uids).associateBy { it.uid }
+
+        return uids.map { uid ->
+            PendingTeamRequest(
+                uid = uid,
+                profile = profiles[uid]
+            )
+        }
+    }
+
+    /**
+     * Owner: approve a request → add to memberUids and delete the joinRequest doc.
+     */
+    suspend fun approveJoinRequest(teamId: String, targetUid: String) {
+        val ownerUid = uidOrThrow()
+        val teamRef = db.collection("teams").document(teamId)
+
+        // find any pending request for (teamId, targetUid)
+        val reqSnap = db.collection("teamJoinRequests")
+            .whereEqualTo("teamId", teamId)
+            .whereEqualTo("uid", targetUid)
+            .whereEqualTo("status", "pending")
+            .limit(1)
+            .get()
+            .await()
+
+        val reqDocRef = reqSnap.documents.firstOrNull()?.reference
+            ?: throw IllegalStateException("Request not found")
+
+        db.runTransaction { tx ->
+            val team = tx.get(teamRef)
+            if (!team.exists()) throw IllegalStateException("Squad not found")
+
+            val owner = team.getString("ownerUid") ?: ""
+            if (owner != ownerUid) throw IllegalAccessException("Not squad owner")
+
+            val members = team.get("memberUids") as? List<String> ?: emptyList()
+            if (!members.contains(targetUid)) {
+                tx.update(teamRef, "memberUids", members + targetUid)
+            }
+
+            tx.delete(reqDocRef)
+        }.await()
+    }
+
+    /**
+     * Owner: deny a request → just delete the joinRequest doc.
+     */
+    suspend fun denyJoinRequest(teamId: String, targetUid: String) {
+        val ownerUid = uidOrThrow()
+        val teamRef = db.collection("teams").document(teamId)
+
+        val reqSnap = db.collection("teamJoinRequests")
+            .whereEqualTo("teamId", teamId)
+            .whereEqualTo("uid", targetUid)
+            .whereEqualTo("status", "pending")
+            .limit(1)
+            .get()
+            .await()
+
+        val reqDocRef = reqSnap.documents.firstOrNull()?.reference
+            ?: return
+
+        db.runTransaction { tx ->
+            val team = tx.get(teamRef)
+            if (!team.exists()) throw IllegalStateException("Squad not found")
+
+            val owner = team.getString("ownerUid") ?: ""
+            if (owner != ownerUid) throw IllegalAccessException("Not squad owner")
+
+            tx.delete(reqDocRef)
+        }.await()
     }
 }

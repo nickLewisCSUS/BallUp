@@ -20,16 +20,21 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -38,19 +43,23 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.auth.FirebaseAuth
 import com.nicklewis.ballup.data.TeamsRepository
+import com.nicklewis.ballup.data.TeamsRepository.PendingTeamRequest
 import com.nicklewis.ballup.model.Team
 import com.nicklewis.ballup.model.UserProfile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 // ---------- UI STATE + VIEWMODEL ----------
 
 data class TeamsUiState(
     val isLoading: Boolean = true,
-    val teams: List<Team> = emptyList(),
+    val teams: List<Team> = emptyList(),              // squads I’m in
+    val discoverableTeams: List<Team> = emptyList(),  // squads I can request
+    val pendingJoinTeamIds: Set<String> = emptySet(), // teams I’ve requested to join
     val errorMessage: String? = null,
     val currentUid: String = ""
 )
@@ -65,18 +74,38 @@ class TeamsViewModel(
 
     init {
         observeMyTeams()
+        observeDiscoverableTeams()
+        observeMyPendingTeamRequests()
     }
 
     private fun observeMyTeams() {
         viewModelScope.launch {
             repo.getTeamsForCurrentUser().collectLatest { teams ->
                 val uid = auth.currentUser?.uid.orEmpty()
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    teams = teams,
-                    currentUid = uid,
-                    errorMessage = null
-                )
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        teams = teams,
+                        currentUid = uid,
+                        errorMessage = null
+                    )
+                }
+            }
+        }
+    }
+
+    private fun observeDiscoverableTeams() {
+        viewModelScope.launch {
+            repo.getDiscoverableTeams().collectLatest { teams ->
+                _uiState.update { it.copy(discoverableTeams = teams) }
+            }
+        }
+    }
+
+    private fun observeMyPendingTeamRequests() {
+        viewModelScope.launch {
+            repo.getPendingJoinRequestsForCurrentUser().collectLatest { pendingIds ->
+                _uiState.update { it.copy(pendingJoinTeamIds = pendingIds.toSet()) }
             }
         }
     }
@@ -127,17 +156,114 @@ class TeamsViewModel(
             }
         }
     }
+
+    // ---- join / leave / cancel ----
+
+    fun requestToJoinTeam(teamId: String, onDone: (Boolean, String?) -> Unit) {
+        val uid = auth.currentUser?.uid
+        if (uid == null) {
+            onDone(false, "Not signed in")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                repo.requestToJoinTeam(teamId, uid)
+                _uiState.update {
+                    it.copy(pendingJoinTeamIds = it.pendingJoinTeamIds + teamId)
+                }
+                onDone(true, null)
+            } catch (e: Exception) {
+                onDone(false, e.message ?: "Couldn't request to join squad")
+            }
+        }
+    }
+
+    fun cancelJoinRequest(teamId: String, onDone: (Boolean, String?) -> Unit) {
+        val uid = auth.currentUser?.uid
+        if (uid == null) {
+            onDone(false, "Not signed in")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                repo.cancelJoinRequest(teamId, uid)
+                _uiState.update {
+                    it.copy(pendingJoinTeamIds = it.pendingJoinTeamIds - teamId)
+                }
+                onDone(true, null)
+            } catch (e: Exception) {
+                onDone(false, e.message ?: "Couldn't cancel join request")
+            }
+        }
+    }
+
+    fun leaveTeam(teamId: String, onDone: (Boolean, String?) -> Unit) {
+        val uid = auth.currentUser?.uid
+        if (uid == null) {
+            onDone(false, "Not signed in")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                repo.leaveTeam(teamId, uid)
+                onDone(true, null)
+            } catch (e: Exception) {
+                onDone(false, e.message ?: "Couldn't leave squad")
+            }
+        }
+    }
+
+    // ---- host approval helpers ----
+
+    fun loadJoinRequestsFor(
+        team: Team,
+        onDone: (Boolean, List<PendingTeamRequest>?, String?) -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                val pending = repo.getPendingRequestsForTeam(team.id)
+                onDone(true, pending, null)
+            } catch (e: Exception) {
+                onDone(false, null, e.message ?: "Failed to load join requests")
+            }
+        }
+    }
+
+    fun approveJoin(teamId: String, uid: String, onDone: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                repo.approveJoinRequest(teamId, uid)
+                onDone(true, null)
+            } catch (e: Exception) {
+                onDone(false, e.message ?: "Failed to approve request")
+            }
+        }
+    }
+
+    fun denyJoin(teamId: String, uid: String, onDone: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                repo.denyJoinRequest(teamId, uid)
+                onDone(true, null)
+            } catch (e: Exception) {
+                onDone(false, e.message ?: "Failed to deny request")
+            }
+        }
+    }
 }
 
 // ---------- SCREEN ----------
 
 @Composable
 fun TeamsScreen(
-    onBackToMap: () -> Unit,
-    onOpenSettings: () -> Unit,
+    onBackToMap: () -> Unit,      // kept for nav wiring, but no longer used
+    onOpenSettings: () -> Unit,  // kept for nav wiring, but no longer used
     viewModel: TeamsViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
     var showCreateDialog by remember { mutableStateOf(false) }
     var newTeamName by remember { mutableStateOf("") }
@@ -162,78 +288,93 @@ fun TeamsScreen(
     var membersError by remember { mutableStateOf<String?>(null) }
     var membersTeamName by remember { mutableStateOf("") }
 
-    val filteredTeams = remember(uiState.teams, searchQuery) {
+    // Join-requests sheet state (for owners)
+    var showRequestsSheet by remember { mutableStateOf(false) }
+    var requestsForTeam by remember { mutableStateOf<List<PendingTeamRequest>>(emptyList()) }
+    var requestsLoading by remember { mutableStateOf(false) }
+    var requestsError by remember { mutableStateOf<String?>(null) }
+    var requestsTeamName by remember { mutableStateOf("") }
+    var requestsTeamId by remember { mutableStateOf("") }
+
+    // Tabs: 0 = My squads, 1 = Find squads
+    var selectedTab by remember { mutableStateOf(0) }
+
+    val mySquadsFiltered = remember(uiState.teams, searchQuery) {
         if (searchQuery.isBlank()) uiState.teams
-        else uiState.teams.filter {
-            it.name.contains(searchQuery, ignoreCase = true)
-        }
+        else uiState.teams.filter { it.name.contains(searchQuery, ignoreCase = true) }
+    }
+
+    val discoverFiltered = remember(uiState.discoverableTeams, searchQuery) {
+        if (searchQuery.isBlank()) uiState.discoverableTeams
+        else uiState.discoverableTeams.filter { it.name.contains(searchQuery, ignoreCase = true) }
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showCreateDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = "Create squad")
+            if (selectedTab == 0) {
+                FloatingActionButton(onClick = { showCreateDialog = true }) {
+                    Icon(Icons.Default.Add, contentDescription = "Create squad")
+                }
             }
         }
     ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .padding(16.dp)
                 .padding(padding)
         ) {
-            // Header / description
-            Column(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-            ) {
-                Text(
-                    text = "Your Squads",
-                    style = MaterialTheme.typography.titleLarge
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Create a squad once, then invite them into your runs from the run details screen.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
+            Text(
+                text = "Squads",
+                style = MaterialTheme.typography.headlineSmall
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Keep your hoop crew together. Reuse the same squads when you start or join runs.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                label = { Text("Search squads") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            uiState.errorMessage?.let {
                 Spacer(modifier = Modifier.height(8.dp))
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onBackToMap, modifier = Modifier.weight(1f)) {
-                        Text("Back to map")
-                    }
-                    Button(onClick = onOpenSettings, modifier = Modifier.weight(1f)) {
-                        Text("Open settings")
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    label = { Text("Search squads") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
                 )
-
-                if (uiState.errorMessage != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = uiState.errorMessage ?: "",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
             }
 
-            // List of squads
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp)
-            ) {
-                if (filteredTeams.isEmpty() && !uiState.isLoading) {
-                    item {
-                        Spacer(Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            TabRow(selectedTabIndex = selectedTab) {
+                Tab(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    text = { Text("My squads") }
+                )
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    text = { Text("Find squads") }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            when (selectedTab) {
+                0 -> {
+                    if (mySquadsFiltered.isEmpty() && !uiState.isLoading) {
                         Text(
                             text = if (searchQuery.isBlank()) {
                                 "You don’t have any squads yet. Tap + to create one."
@@ -242,41 +383,158 @@ fun TeamsScreen(
                             },
                             style = MaterialTheme.typography.bodyMedium
                         )
-                    }
-                } else {
-                    items(filteredTeams, key = { it.id }) { team ->
-                        val isOwner = team.ownerUid == uiState.currentUid
-                        SquadRow(
-                            team = team,
-                            isOwner = isOwner,
-                            onViewMembers = { tappedTeam ->
-                                membersTeamName = tappedTeam.name
-                                membersForTeam = emptyList()
-                                membersError = null
-                                membersLoading = true
-                                showMembersSheet = true
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(mySquadsFiltered, key = { it.id }) { team ->
+                                val isOwner = team.ownerUid == uiState.currentUid
+                                SquadRow(
+                                    team = team,
+                                    isOwner = isOwner,
+                                    onViewMembers = { tappedTeam ->
+                                        membersTeamName = tappedTeam.name
+                                        membersForTeam = emptyList()
+                                        membersError = null
+                                        membersLoading = true
+                                        showMembersSheet = true
 
-                                viewModel.loadMembersFor(tappedTeam) { ok, profiles, err ->
-                                    membersLoading = false
-                                    if (ok) {
-                                        membersForTeam = profiles.orEmpty()
-                                    } else {
-                                        membersError = err
-                                    }
-                                }
-                            },
-                            onEdit = {
-                                teamBeingRenamed = it
-                                renameText = it.name
-                                renameError = null
-                            },
-                            onDelete = {
-                                teamBeingDeleted = it
-                                deleteError = null
+                                        viewModel.loadMembersFor(tappedTeam) { ok, profiles, err ->
+                                            membersLoading = false
+                                            if (ok) {
+                                                membersForTeam = profiles.orEmpty()
+                                            } else {
+                                                membersError = err
+                                            }
+                                        }
+                                    },
+                                    onEdit = {
+                                        teamBeingRenamed = it
+                                        renameText = it.name
+                                        renameError = null
+                                    },
+                                    onDelete = {
+                                        teamBeingDeleted = it
+                                        deleteError = null
+                                    },
+                                    onLeave = { leavingTeam ->
+                                        viewModel.leaveTeam(leavingTeam.id) { ok, msg ->
+                                            scope.launch {
+                                                if (ok) {
+                                                    snackbarHostState.showSnackbar(
+                                                        "Left ${leavingTeam.name}"
+                                                    )
+                                                } else if (msg != null) {
+                                                    snackbarHostState.showSnackbar(msg)
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onViewRequests = { tappedTeam ->
+                                        requestsTeamName = tappedTeam.name
+                                        requestsTeamId = tappedTeam.id
+                                        requestsForTeam = emptyList()
+                                        requestsError = null
+                                        requestsLoading = true
+                                        showRequestsSheet = true
+
+                                        viewModel.loadJoinRequestsFor(tappedTeam) { ok, pending, err ->
+                                            requestsLoading = false
+                                            if (ok) {
+                                                requestsForTeam = pending.orEmpty()
+                                            } else {
+                                                requestsError = err
+                                            }
+                                        }
+                                    },
+                                    currentUid = uiState.currentUid
+                                )
                             }
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        }
                     }
+                }
+
+                1 -> {
+                    if (discoverFiltered.isEmpty() && !uiState.isLoading) {
+                        Text(
+                            text = if (searchQuery.isBlank()) {
+                                "No squads to discover yet. As more players create squads, you’ll see them here."
+                            } else {
+                                "No squads match “$searchQuery”."
+                            },
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(discoverFiltered, key = { it.id }) { team ->
+                                val isOwner = team.ownerUid == uiState.currentUid
+                                val isMember = team.memberUids.contains(uiState.currentUid)
+                                val hasRequested = uiState.pendingJoinTeamIds.contains(team.id)
+
+                                DiscoverSquadRow(
+                                    team = team,
+                                    isOwner = isOwner,
+                                    isMember = isMember,
+                                    hasRequested = hasRequested,
+                                    onRequestJoin = { t ->
+                                        viewModel.requestToJoinTeam(t.id) { ok, msg ->
+                                            scope.launch {
+                                                if (ok) {
+                                                    snackbarHostState.showSnackbar(
+                                                        "Request sent to join ${t.name}"
+                                                    )
+                                                } else if (msg != null) {
+                                                    snackbarHostState.showSnackbar(msg)
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onCancelRequest = { t ->
+                                        viewModel.cancelJoinRequest(t.id) { ok, msg ->
+                                            scope.launch {
+                                                if (ok) {
+                                                    snackbarHostState.showSnackbar(
+                                                        "Request cancelled for ${t.name}"
+                                                    )
+                                                } else if (msg != null) {
+                                                    snackbarHostState.showSnackbar(msg)
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onViewMembers = { tappedTeam ->
+                                        membersTeamName = tappedTeam.name
+                                        membersForTeam = emptyList()
+                                        membersError = null
+                                        membersLoading = true
+                                        showMembersSheet = true
+
+                                        viewModel.loadMembersFor(tappedTeam) { ok, profiles, err ->
+                                            membersLoading = false
+                                            if (ok) {
+                                                membersForTeam = profiles.orEmpty()
+                                            } else {
+                                                membersError = err
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (uiState.isLoading) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row {
+                    CircularProgressIndicator()
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Loading squads…")
                 }
             }
         }
@@ -510,6 +768,7 @@ fun TeamsScreen(
                             Text("Loading squad members…")
                         }
                     }
+
                     membersError != null -> {
                         Text(
                             text = membersError!!,
@@ -517,12 +776,14 @@ fun TeamsScreen(
                             color = MaterialTheme.colorScheme.error
                         )
                     }
+
                     membersForTeam.isEmpty() -> {
                         Text(
                             text = "No members yet. You’re the only one in this squad for now.",
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
+
                     else -> {
                         Spacer(Modifier.height(4.dp))
                         LazyColumn(
@@ -532,6 +793,144 @@ fun TeamsScreen(
                         ) {
                             items(membersForTeam, key = { it.uid }) { profile ->
                                 MemberRow(profile = profile)
+                                Spacer(Modifier.height(8.dp))
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+            }
+        }
+    }
+
+    // Join requests bottom sheet (owner only)
+    if (showRequestsSheet) {
+        ModalBottomSheet(
+            onDismissRequest = {
+                showRequestsSheet = false
+                requestsForTeam = emptyList()
+                requestsError = null
+                requestsLoading = false
+            }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                Text(
+                    text = "$requestsTeamName – join requests",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Spacer(Modifier.height(8.dp))
+
+                when {
+                    requestsLoading -> {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 16.dp),
+                        ) {
+                            CircularProgressIndicator()
+                            Spacer(Modifier.width(12.dp))
+                            Text("Loading requests…")
+                        }
+                    }
+
+                    requestsError != null -> {
+                        Text(
+                            text = requestsError!!,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+
+                    requestsForTeam.isEmpty() -> {
+                        Text(
+                            text = "No pending requests right now.",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+
+                    else -> {
+                        Spacer(Modifier.height(4.dp))
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 320.dp)
+                        ) {
+                            items(requestsForTeam, key = { it.uid }) { req ->
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 6.dp)
+                                ) {
+                                    val profile = req.profile
+                                    Text(
+                                        text = profile?.username?.ifBlank {
+                                            profile.displayName ?: req.uid
+                                        } ?: req.uid,
+                                        style = MaterialTheme.typography.bodyLarge
+                                    )
+                                    if (profile != null &&
+                                        !profile.displayName.isNullOrBlank() &&
+                                        profile.displayName != profile.username
+                                    ) {
+                                        Text(
+                                            text = profile.displayName!!,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    if (profile != null) {
+                                        Text(
+                                            text = "Skill: ${profile.skillLevel}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    Spacer(Modifier.height(4.dp))
+
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(onClick = {
+                                            viewModel.approveJoin(requestsTeamId, req.uid) { ok, msg ->
+                                                scope.launch {
+                                                    if (ok) {
+                                                        requestsForTeam =
+                                                            requestsForTeam.filterNot { it.uid == req.uid }
+                                                        snackbarHostState.showSnackbar(
+                                                            "Approved request"
+                                                        )
+                                                    } else if (msg != null) {
+                                                        snackbarHostState.showSnackbar(msg)
+                                                    }
+                                                }
+                                            }
+                                        }) {
+                                            Text("Approve")
+                                        }
+                                        OutlinedButton(onClick = {
+                                            viewModel.denyJoin(requestsTeamId, req.uid) { ok, msg ->
+                                                scope.launch {
+                                                    if (ok) {
+                                                        requestsForTeam =
+                                                            requestsForTeam.filterNot { it.uid == req.uid }
+                                                        snackbarHostState.showSnackbar(
+                                                            "Denied request"
+                                                        )
+                                                    } else if (msg != null) {
+                                                        snackbarHostState.showSnackbar(msg)
+                                                    }
+                                                }
+                                            }
+                                        }) {
+                                            Text("Deny")
+                                        }
+                                    }
+                                }
+
                                 Spacer(Modifier.height(8.dp))
                             }
                         }
@@ -552,12 +951,19 @@ private fun SquadRow(
     isOwner: Boolean,
     onViewMembers: (Team) -> Unit,
     onEdit: (Team) -> Unit,
-    onDelete: (Team) -> Unit
+    onDelete: (Team) -> Unit,
+    onLeave: (Team) -> Unit,
+    onViewRequests: (Team) -> Unit,
+    currentUid: String
 ) {
+    val isMemberButNotOwner = !isOwner && team.memberUids.contains(currentUid)
+
     Card(
-        modifier = Modifier
-            .fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
     ) {
         Column(
             modifier = Modifier
@@ -579,17 +985,27 @@ private fun SquadRow(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    if (isOwner) {
-                        Text(
-                            text = "You’re the owner",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                    when {
+                        isOwner -> {
+                            Text(
+                                text = "You’re the owner",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+
+                        isMemberButNotOwner -> {
+                            Text(
+                                text = "You’re in this squad",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.secondary
+                            )
+                        }
                     }
                 }
 
-                if (isOwner) {
-                    Row {
+                Row {
+                    if (isOwner) {
                         IconButton(onClick = { onEdit(team) }) {
                             Icon(
                                 imageVector = Icons.Default.Edit,
@@ -601,6 +1017,102 @@ private fun SquadRow(
                                 imageVector = Icons.Default.Delete,
                                 contentDescription = "Delete squad"
                             )
+                        }
+                        OutlinedButton(onClick = { onViewRequests(team) }) {
+                            Text("View requests")
+                        }
+                    } else if (isMemberButNotOwner) {
+                        OutlinedButton(onClick = { onLeave(team) }) {
+                            Text("Leave")
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
+
+            TextButton(onClick = { onViewMembers(team) }) {
+                Text("View members")
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiscoverSquadRow(
+    team: Team,
+    isOwner: Boolean,
+    isMember: Boolean,
+    hasRequested: Boolean,
+    onRequestJoin: (Team) -> Unit,
+    onCancelRequest: (Team) -> Unit,
+    onViewMembers: (Team) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = team.name,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = "${team.memberUids.size} players",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    when {
+                        isOwner -> {
+                            Text(
+                                text = "You own this squad",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+
+                        isMember -> {
+                            Text(
+                                text = "Already in this squad",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.secondary
+                            )
+                        }
+
+                        hasRequested -> {
+                            Text(
+                                text = "Request pending",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.tertiary
+                            )
+                        }
+                    }
+                }
+
+                when {
+                    isOwner || isMember -> {
+                        // no join actions
+                    }
+
+                    hasRequested -> {
+                        OutlinedButton(onClick = { onCancelRequest(team) }) {
+                            Text("Cancel")
+                        }
+                    }
+
+                    else -> {
+                        Button(onClick = { onRequestJoin(team) }) {
+                            Text("Request")
                         }
                     }
                 }
@@ -642,4 +1154,3 @@ private fun MemberRow(profile: UserProfile) {
         )
     }
 }
-

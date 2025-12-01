@@ -3,6 +3,7 @@ package com.nicklewis.ballup.data
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.nicklewis.ballup.model.Team
+import com.nicklewis.ballup.model.UserProfile
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -18,11 +19,31 @@ class TeamsRepository(
 
     /**
      * Live list of teams where the user is the owner.
+     * (Kept for compatibility if other parts of the app use it.)
      */
     fun getOwnedTeams(): Flow<List<Team>> = callbackFlow {
         val uid = uidOrThrow()
         val reg = db.collection("teams")
             .whereEqualTo("ownerUid", uid)
+            .addSnapshotListener { snap, err ->
+                if (err != null) {
+                    close(err)
+                    return@addSnapshotListener
+                }
+                val teams = snap?.toObjects(Team::class.java).orEmpty()
+                trySend(teams)
+            }
+
+        awaitClose { reg.remove() }
+    }
+
+    /**
+     * Live list of teams where the current user is a member (includes owned teams).
+     */
+    fun getTeamsForCurrentUser(): Flow<List<Team>> = callbackFlow {
+        val uid = uidOrThrow()
+        val reg = db.collection("teams")
+            .whereArrayContains("memberUids", uid)
             .addSnapshotListener { snap, err ->
                 if (err != null) {
                     close(err)
@@ -52,7 +73,7 @@ class TeamsRepository(
     }
 
     /**
-     * Optional helper to add a member to a team (later you may want invite flows).
+     * Optional helper to add a member to a team (owner-only).
      */
     suspend fun addMember(teamId: String, memberUid: String) {
         val uid = uidOrThrow()
@@ -69,5 +90,56 @@ class TeamsRepository(
                 tx.update(ref, "memberUids", members + memberUid)
             }
         }.await()
+    }
+
+    /**
+     * Rename a team (owner-only).
+     */
+    suspend fun renameTeam(teamId: String, newName: String) {
+        val uid = uidOrThrow()
+        val ref = db.collection("teams").document(teamId)
+
+        db.runTransaction { tx ->
+            val snap = tx.get(ref)
+            if (!snap.exists()) throw IllegalStateException("Team not found")
+            val ownerUid = snap.getString("ownerUid") ?: ""
+            if (ownerUid != uid) throw IllegalAccessException("Not team owner")
+
+            tx.update(ref, "name", newName)
+        }.await()
+    }
+
+    /**
+     * Delete a team (owner-only).
+     */
+    suspend fun deleteTeam(teamId: String) {
+        val uid = uidOrThrow()
+        val ref = db.collection("teams").document(teamId)
+
+        db.runTransaction { tx ->
+            val snap = tx.get(ref)
+            if (!snap.exists()) return@runTransaction
+            val ownerUid = snap.getString("ownerUid") ?: ""
+            if (ownerUid != uid) throw IllegalAccessException("Not team owner")
+
+            tx.delete(ref)
+        }.await()
+    }
+
+    /**
+     * Fetch user profiles for the given member UIDs.
+     * Simple implementation: one doc read per uid.
+     */
+    suspend fun getMembers(memberUids: List<String>): List<UserProfile> {
+        if (memberUids.isEmpty()) return emptyList()
+
+        val col = db.collection("users")
+        val snaps = memberUids.map { uid ->
+            col.document(uid).get().await()
+        }
+
+        return snaps.mapNotNull { snap ->
+            snap.toObject(UserProfile::class.java)
+        }
     }
 }

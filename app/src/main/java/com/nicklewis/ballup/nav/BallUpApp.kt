@@ -38,7 +38,8 @@ import com.nicklewis.ballup.ui.runs.RunDetailsViewModelFactory
 import com.nicklewis.ballup.ui.settings.EditProfileScreen
 import com.nicklewis.ballup.ui.settings.NotificationSettingsScreen
 import com.nicklewis.ballup.ui.settings.SettingsScreen
-import com.nicklewis.ballup.ui.teams.TeamsScreen   // 👈 NEW
+import com.nicklewis.ballup.ui.teams.TeamsScreen
+import com.nicklewis.ballup.ui.runs.CourtRunsScreen   // <-- NEW IMPORT
 
 const val ROUTE_RUN = "run/{runId}"
 
@@ -49,14 +50,12 @@ fun BallUpApp(
 ) {
     val nav = rememberNavController()
 
-    // 🔹 Now includes Teams/Squads
     val items = listOf(Screen.Map, Screen.List, Screen.Teams, Screen.Settings)
 
     var showAddCourt by remember { mutableStateOf(false) }
     var showIndoor by rememberSaveable { mutableStateOf(true) }
     var showOutdoor by rememberSaveable { mutableStateOf(true) }
 
-    // set & clear the global holder so MainActivity can navigate from pushes
     DisposableEffect(nav) {
         AppNavControllerHolder.navController = nav
         onDispose {
@@ -70,7 +69,7 @@ fun BallUpApp(
         topBar = {
             val title = when (currentRoute(nav)) {
                 Screen.List.route     -> "BallUp — Courts"
-                Screen.Teams.route    -> "BallUp — Squads"      // 👈 NEW title
+                Screen.Teams.route    -> "BallUp — Squads"
                 Screen.Settings.route -> "BallUp — Settings"
                 else                  -> "BallUp — Map"
             }
@@ -181,6 +180,20 @@ fun BallUpApp(
                         runId = runId,
                         onBack = { nav.popBackStack() },
                         viewModel = vm
+                    )
+                }
+
+                // ------------------------------------------------------
+                // *** NEW DESTINATION: court/{courtId}/runs ***
+                // ------------------------------------------------------
+                composable(
+                    route = "court/{courtId}/runs",
+                    arguments = listOf(navArgument("courtId") { type = NavType.StringType })
+                ) { backStackEntry ->
+                    val courtId = backStackEntry.arguments?.getString("courtId")!!
+                    CourtRunsScreen(
+                        courtId = courtId,
+                        onBack = { nav.popBackStack() }
                     )
                 }
             }

@@ -1,10 +1,15 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 
 package com.nicklewis.ballup.ui.teams
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
@@ -25,10 +30,13 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -36,6 +44,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -60,6 +69,7 @@ data class TeamsUiState(
     val teams: List<Team> = emptyList(),              // squads I’m in
     val discoverableTeams: List<Team> = emptyList(),  // squads I can request
     val pendingJoinTeamIds: Set<String> = emptySet(), // teams I’ve requested to join
+    val incomingInvites: List<TeamsRepository.TeamInviteForUser> = emptyList(), // NEW
     val errorMessage: String? = null,
     val currentUid: String = ""
 )
@@ -76,6 +86,7 @@ class TeamsViewModel(
         observeMyTeams()
         observeDiscoverableTeams()
         observeMyPendingTeamRequests()
+        observeInvitesForMe()
     }
 
     private fun observeMyTeams() {
@@ -110,13 +121,51 @@ class TeamsViewModel(
         }
     }
 
-    fun createTeam(name: String, onDone: (Boolean, String?) -> Unit) {
+    private fun observeInvitesForMe() {
+        viewModelScope.launch {
+            repo.getInvitesForCurrentUser().collectLatest { invites ->
+                _uiState.update { it.copy(incomingInvites = invites) }
+            }
+        }
+    }
+
+    fun createTeam(
+        name: String,
+        preferredSkillLevel: String?,
+        playDays: List<String>,
+        inviteOnly: Boolean,
+        onDone: (Boolean, String?) -> Unit
+    ) {
         viewModelScope.launch {
             try {
-                repo.createTeam(name.trim())
+                repo.createTeam(name.trim(), preferredSkillLevel, playDays, inviteOnly)
                 onDone(true, null)
             } catch (e: Exception) {
                 onDone(false, e.message ?: "Failed to create squad")
+            }
+        }
+    }
+
+    fun updateTeam(
+        teamId: String,
+        name: String,
+        preferredSkillLevel: String?,
+        playDays: List<String>,
+        inviteOnly: Boolean,
+        onDone: (Boolean, String?) -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                repo.updateTeam(
+                    teamId = teamId,
+                    name = name.trim(),
+                    preferredSkillLevel = preferredSkillLevel,
+                    playDays = playDays,
+                    inviteOnly = inviteOnly
+                )
+                onDone(true, null)
+            } catch (e: Exception) {
+                onDone(false, e.message ?: "Failed to update squad")
             }
         }
     }
@@ -250,6 +299,45 @@ class TeamsViewModel(
             }
         }
     }
+
+    // ---- invites: owner -> player ----
+
+    fun sendInviteByUsername(
+        teamId: String,
+        username: String,
+        onDone: (Boolean, String?) -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                repo.sendTeamInviteByUsername(teamId, username.trim())
+                onDone(true, null)
+            } catch (e: Exception) {
+                onDone(false, e.message ?: "Failed to send invite")
+            }
+        }
+    }
+
+    fun acceptInvite(inviteId: String, onDone: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                repo.acceptInvite(inviteId)
+                onDone(true, null)
+            } catch (e: Exception) {
+                onDone(false, e.message ?: "Failed to accept invite")
+            }
+        }
+    }
+
+    fun declineInvite(inviteId: String, onDone: (Boolean, String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                repo.declineInvite(inviteId)
+                onDone(true, null)
+            } catch (e: Exception) {
+                onDone(false, e.message ?: "Failed to decline invite")
+            }
+        }
+    }
 }
 
 // ---------- SCREEN ----------
@@ -265,6 +353,9 @@ fun TeamsScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
+    // tabs: 0 = My squads, 1 = Find squads, 2 = Invites
+    var selectedTab by remember { mutableStateOf(0) }
+
     var showCreateDialog by remember { mutableStateOf(false) }
     var newTeamName by remember { mutableStateOf("") }
     var createError by remember { mutableStateOf<String?>(null) }
@@ -272,10 +363,14 @@ fun TeamsScreen(
 
     var searchQuery by remember { mutableStateOf("") }
 
-    var teamBeingRenamed by remember { mutableStateOf<Team?>(null) }
-    var renameText by remember { mutableStateOf("") }
-    var renameError by remember { mutableStateOf<String?>(null) }
-    var renaming by remember { mutableStateOf(false) }
+    // Edit dialog state
+    var teamBeingEdited by remember { mutableStateOf<Team?>(null) }
+    var editName by remember { mutableStateOf("") }
+    var editSelectedSkill by remember { mutableStateOf("Any") }
+    var editSelectedDays by remember { mutableStateOf(setOf<String>()) }
+    var editInviteOnly by remember { mutableStateOf(false) }
+    var editError by remember { mutableStateOf<String?>(null) }
+    var editing by remember { mutableStateOf(false) }
 
     var teamBeingDeleted by remember { mutableStateOf<Team?>(null) }
     var deleteError by remember { mutableStateOf<String?>(null) }
@@ -296,8 +391,12 @@ fun TeamsScreen(
     var requestsTeamName by remember { mutableStateOf("") }
     var requestsTeamId by remember { mutableStateOf("") }
 
-    // Tabs: 0 = My squads, 1 = Find squads
-    var selectedTab by remember { mutableStateOf(0) }
+    // Invite dialog (owner -> player)
+    var showInviteDialog by remember { mutableStateOf(false) }
+    var inviteUsername by remember { mutableStateOf("") }
+    var inviteError by remember { mutableStateOf<String?>(null) }
+    var invitingTeam by remember { mutableStateOf<Team?>(null) }
+    var inviting by remember { mutableStateOf(false) }
 
     val mySquadsFiltered = remember(uiState.teams, searchQuery) {
         if (searchQuery.isBlank()) uiState.teams
@@ -308,6 +407,14 @@ fun TeamsScreen(
         if (searchQuery.isBlank()) uiState.discoverableTeams
         else uiState.discoverableTeams.filter { it.name.contains(searchQuery, ignoreCase = true) }
     }
+
+    // Create dialog state
+    var selectedSkill by remember { mutableStateOf("Any") }
+    var selectedDays by remember { mutableStateOf(setOf<String>()) }
+    var inviteOnly by remember { mutableStateOf(false) }
+
+    val skillOptions = listOf("Any", "Casual runs", "Run it back", "Tryhard / league")
+    val dayOptions = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -368,11 +475,17 @@ fun TeamsScreen(
                     onClick = { selectedTab = 1 },
                     text = { Text("Find squads") }
                 )
+                Tab(
+                    selected = selectedTab == 2,
+                    onClick = { selectedTab = 2 },
+                    text = { Text("Invites") }
+                )
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
             when (selectedTab) {
+                // ---- My squads ----
                 0 -> {
                     if (mySquadsFiltered.isEmpty() && !uiState.isLoading) {
                         Text(
@@ -409,10 +522,13 @@ fun TeamsScreen(
                                             }
                                         }
                                     },
-                                    onEdit = {
-                                        teamBeingRenamed = it
-                                        renameText = it.name
-                                        renameError = null
+                                    onEdit = { t ->
+                                        teamBeingEdited = t
+                                        editName = t.name
+                                        editSelectedSkill = t.preferredSkillLevel ?: "Any"
+                                        editSelectedDays = t.playDays.toSet()
+                                        editInviteOnly = t.inviteOnly
+                                        editError = null
                                     },
                                     onDelete = {
                                         teamBeingDeleted = it
@@ -448,6 +564,13 @@ fun TeamsScreen(
                                             }
                                         }
                                     },
+                                    onInvite = { squad ->
+                                        invitingTeam = squad
+                                        inviteUsername = ""
+                                        inviteError = null
+                                        inviting = false
+                                        showInviteDialog = true
+                                    },
                                     currentUid = uiState.currentUid
                                 )
                             }
@@ -455,6 +578,7 @@ fun TeamsScreen(
                     }
                 }
 
+                // ---- Find squads ----
                 1 -> {
                     if (discoverFiltered.isEmpty() && !uiState.isLoading) {
                         Text(
@@ -527,6 +651,53 @@ fun TeamsScreen(
                         }
                     }
                 }
+
+                // ---- Invites tab ----
+                2 -> {
+                    if (uiState.incomingInvites.isEmpty() && !uiState.isLoading) {
+                        Text(
+                            text = "You don’t have any squad invites right now.",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(uiState.incomingInvites, key = { it.inviteId }) { invite ->
+                                InviteRow(
+                                    invite = invite,
+                                    onAccept = {
+                                        viewModel.acceptInvite(invite.inviteId) { ok, msg ->
+                                            scope.launch {
+                                                if (ok) {
+                                                    snackbarHostState.showSnackbar(
+                                                        "Joined ${invite.teamName}"
+                                                    )
+                                                } else if (msg != null) {
+                                                    snackbarHostState.showSnackbar(msg)
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onDecline = {
+                                        viewModel.declineInvite(invite.inviteId) { ok, msg ->
+                                            scope.launch {
+                                                if (ok) {
+                                                    snackbarHostState.showSnackbar(
+                                                        "Invite declined"
+                                                    )
+                                                } else if (msg != null) {
+                                                    snackbarHostState.showSnackbar(msg)
+                                                }
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             if (uiState.isLoading) {
@@ -540,7 +711,8 @@ fun TeamsScreen(
         }
     }
 
-    // Create squad dialog
+    // --------- Create squad dialog ---------
+
     if (showCreateDialog) {
         AlertDialog(
             onDismissRequest = {
@@ -548,11 +720,19 @@ fun TeamsScreen(
                     showCreateDialog = false
                     newTeamName = ""
                     createError = null
+                    selectedSkill = "Any"
+                    selectedDays = emptySet()
+                    inviteOnly = false
                 }
             },
             title = { Text("Create new squad") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                ) {
                     OutlinedTextField(
                         value = newTeamName,
                         onValueChange = {
@@ -560,8 +740,74 @@ fun TeamsScreen(
                             createError = null
                         },
                         label = { Text("Squad name") },
-                        singleLine = true
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
                     )
+
+                    // Skill section
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "Preferred skill level",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            skillOptions.forEach { option ->
+                                FilterChip(
+                                    selected = selectedSkill == option,
+                                    onClick = { selectedSkill = option },
+                                    label = { Text(option) }
+                                )
+                            }
+                        }
+                    }
+
+                    // Days section
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "Days you usually play",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            dayOptions.forEach { day ->
+                                FilterChip(
+                                    selected = selectedDays.contains(day),
+                                    onClick = {
+                                        selectedDays = if (selectedDays.contains(day)) {
+                                            selectedDays - day
+                                        } else {
+                                            selectedDays + day
+                                        }
+                                    },
+                                    label = { Text(day) }
+                                )
+                            }
+                        }
+                    }
+
+                    // Privacy section
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Private squad", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "Hide this squad from \"Find squads\". Players can’t send join requests.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = inviteOnly,
+                            onCheckedChange = { inviteOnly = it }
+                        )
+                    }
+
                     if (createError != null) {
                         Text(
                             text = createError!!,
@@ -577,11 +823,23 @@ fun TeamsScreen(
                     onClick = {
                         if (newTeamName.isBlank()) return@TextButton
                         creating = true
-                        viewModel.createTeam(newTeamName) { ok, msg ->
+
+                        val skill = selectedSkill.ifBlank { null }
+                        val days = selectedDays.toList()
+
+                        viewModel.createTeam(
+                            name = newTeamName,
+                            preferredSkillLevel = skill,
+                            playDays = days,
+                            inviteOnly = inviteOnly
+                        ) { ok, msg ->
                             creating = false
                             if (ok) {
                                 newTeamName = ""
                                 createError = null
+                                selectedSkill = "Any"
+                                selectedDays = emptySet()
+                                inviteOnly = false
                                 showCreateDialog = false
                             } else {
                                 createError = msg
@@ -599,6 +857,9 @@ fun TeamsScreen(
                         showCreateDialog = false
                         newTeamName = ""
                         createError = null
+                        selectedSkill = "Any"
+                        selectedDays = emptySet()
+                        inviteOnly = false
                     }
                 ) {
                     Text("Cancel")
@@ -607,32 +868,104 @@ fun TeamsScreen(
         )
     }
 
-    // Rename squad dialog
-    val renameTarget = teamBeingRenamed
-    if (renameTarget != null) {
+    // --------- Edit squad dialog ---------
+
+    val editTarget = teamBeingEdited
+    if (editTarget != null) {
         AlertDialog(
             onDismissRequest = {
-                if (!renaming) {
-                    teamBeingRenamed = null
-                    renameText = ""
-                    renameError = null
+                if (!editing) {
+                    teamBeingEdited = null
+                    editName = ""
+                    editError = null
                 }
             },
-            title = { Text("Rename squad") },
+            title = { Text("Edit squad") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                ) {
                     OutlinedTextField(
-                        value = renameText,
+                        value = editName,
                         onValueChange = {
-                            renameText = it
-                            renameError = null
+                            editName = it
+                            editError = null
                         },
-                        label = { Text("New squad name") },
-                        singleLine = true
+                        label = { Text("Squad name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
                     )
-                    if (renameError != null) {
+
+                    // Skill section
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
-                            text = renameError!!,
+                            text = "Preferred skill level",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            skillOptions.forEach { option ->
+                                FilterChip(
+                                    selected = editSelectedSkill == option,
+                                    onClick = { editSelectedSkill = option },
+                                    label = { Text(option) }
+                                )
+                            }
+                        }
+                    }
+
+                    // Days section
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "Days you usually play",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            dayOptions.forEach { day ->
+                                FilterChip(
+                                    selected = editSelectedDays.contains(day),
+                                    onClick = {
+                                        editSelectedDays = if (editSelectedDays.contains(day)) {
+                                            editSelectedDays - day
+                                        } else {
+                                            editSelectedDays + day
+                                        }
+                                    },
+                                    label = { Text(day) }
+                                )
+                            }
+                        }
+                    }
+
+                    // Privacy section
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Private squad", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "Hide this squad from \"Find squads\". Players can’t send join requests.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = editInviteOnly,
+                            onCheckedChange = { editInviteOnly = it }
+                        )
+                    }
+
+                    if (editError != null) {
+                        Text(
+                            text = editError!!,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error
                         )
@@ -641,32 +974,42 @@ fun TeamsScreen(
             },
             confirmButton = {
                 TextButton(
-                    enabled = !renaming && renameText.isNotBlank(),
+                    enabled = !editing && editName.isNotBlank(),
                     onClick = {
-                        if (renameText.isBlank()) return@TextButton
-                        renaming = true
-                        viewModel.renameTeam(renameTarget.id, renameText) { ok, msg ->
-                            renaming = false
+                        if (editName.isBlank()) return@TextButton
+                        editing = true
+
+                        val skill = editSelectedSkill.ifBlank { null }
+                        val days = editSelectedDays.toList()
+
+                        viewModel.updateTeam(
+                            teamId = editTarget.id,
+                            name = editName,
+                            preferredSkillLevel = skill,
+                            playDays = days,
+                            inviteOnly = editInviteOnly
+                        ) { ok, msg ->
+                            editing = false
                             if (ok) {
-                                teamBeingRenamed = null
-                                renameText = ""
-                                renameError = null
+                                teamBeingEdited = null
+                                editName = ""
+                                editError = null
                             } else {
-                                renameError = msg
+                                editError = msg
                             }
                         }
                     }
                 ) {
-                    Text(if (renaming) "Saving…" else "Save")
+                    Text(if (editing) "Saving…" else "Save")
                 }
             },
             dismissButton = {
                 TextButton(
-                    enabled = !renaming,
+                    enabled = !editing,
                     onClick = {
-                        teamBeingRenamed = null
-                        renameText = ""
-                        renameError = null
+                        teamBeingEdited = null
+                        editName = ""
+                        editError = null
                     }
                 ) {
                     Text("Cancel")
@@ -675,7 +1018,8 @@ fun TeamsScreen(
         )
     }
 
-    // Delete squad dialog
+    // --------- Delete squad dialog ---------
+
     val deleteTarget = teamBeingDeleted
     if (deleteTarget != null) {
         AlertDialog(
@@ -735,7 +1079,88 @@ fun TeamsScreen(
         )
     }
 
-    // Members bottom sheet
+    // --------- Invite players dialog (owner -> player) ---------
+
+    if (showInviteDialog && invitingTeam != null) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!inviting) {
+                    showInviteDialog = false
+                    invitingTeam = null
+                    inviteUsername = ""
+                    inviteError = null
+                }
+            },
+            title = { Text("Invite player to ${invitingTeam!!.name}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = inviteUsername,
+                        onValueChange = {
+                            inviteUsername = it
+                            inviteError = null
+                        },
+                        label = { Text("Player username") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        text = "Enter their BallUp username. They’ll see this squad in the Invites tab.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (inviteError != null) {
+                        Text(
+                            text = inviteError!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !inviting && inviteUsername.isNotBlank(),
+                    onClick = {
+                        val team = invitingTeam ?: return@TextButton
+                        inviting = true
+                        viewModel.sendInviteByUsername(team.id, inviteUsername) { ok, msg ->
+                            inviting = false
+                            if (ok) {
+                                showInviteDialog = false
+                                invitingTeam = null
+                                inviteUsername = ""
+                                inviteError = null
+                                scope.launch {
+                                    snackbarHostState.showSnackbar("Invite sent")
+                                }
+                            } else {
+                                inviteError = msg
+                            }
+                        }
+                    }
+                ) {
+                    Text(if (inviting) "Sending…" else "Send invite")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !inviting,
+                    onClick = {
+                        showInviteDialog = false
+                        invitingTeam = null
+                        inviteUsername = ""
+                        inviteError = null
+                    }
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // --------- Members bottom sheet ---------
+
     if (showMembersSheet) {
         ModalBottomSheet(
             onDismissRequest = {
@@ -804,7 +1229,8 @@ fun TeamsScreen(
         }
     }
 
-    // Join requests bottom sheet (owner only)
+    // --------- Join requests bottom sheet (owner only) ---------
+
     if (showRequestsSheet) {
         ModalBottomSheet(
             onDismissRequest = {
@@ -954,6 +1380,7 @@ private fun SquadRow(
     onDelete: (Team) -> Unit,
     onLeave: (Team) -> Unit,
     onViewRequests: (Team) -> Unit,
+    onInvite: (Team) -> Unit,
     currentUid: String
 ) {
     val isMemberButNotOwner = !isOwner && team.memberUids.contains(currentUid)
@@ -968,23 +1395,55 @@ private fun SquadRow(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                // LEFT: details
+                Column(
+                    modifier = Modifier.weight(1f),
+                ) {
                     Text(
                         text = team.name,
                         style = MaterialTheme.typography.titleMedium
                     )
-                    Spacer(Modifier.height(2.dp))
+                    Spacer(Modifier.height(4.dp))
                     Text(
                         text = "${team.memberUids.size} players",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+
+                    if (team.preferredSkillLevel != null) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = "Skill: ${team.preferredSkillLevel}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    if (team.playDays.isNotEmpty()) {
+                        Text(
+                            text = "Days: ${team.playDays.joinToString(", ")}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    if (team.inviteOnly) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "Private squad (host invites only)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.tertiary
+                        )
+                    }
+
+                    Spacer(Modifier.height(4.dp))
                     when {
                         isOwner -> {
                             Text(
@@ -1004,22 +1463,33 @@ private fun SquadRow(
                     }
                 }
 
-                Row {
+                Spacer(Modifier.width(12.dp))
+
+                // RIGHT: actions stacked so they don't squeeze the content
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     if (isOwner) {
-                        IconButton(onClick = { onEdit(team) }) {
-                            Icon(
-                                imageVector = Icons.Default.Edit,
-                                contentDescription = "Edit squad"
-                            )
-                        }
-                        IconButton(onClick = { onDelete(team) }) {
-                            Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = "Delete squad"
-                            )
+                        Row {
+                            IconButton(onClick = { onEdit(team) }) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = "Edit squad"
+                                )
+                            }
+                            IconButton(onClick = { onDelete(team) }) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Delete squad"
+                                )
+                            }
                         }
                         OutlinedButton(onClick = { onViewRequests(team) }) {
                             Text("View requests")
+                        }
+                        OutlinedButton(onClick = { onInvite(team) }) {
+                            Text("Invite players")
                         }
                     } else if (isMemberButNotOwner) {
                         OutlinedButton(onClick = { onLeave(team) }) {
@@ -1029,7 +1499,7 @@ private fun SquadRow(
                 }
             }
 
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(8.dp))
 
             TextButton(onClick = { onViewMembers(team) }) {
                 Text("View members")
@@ -1055,23 +1525,51 @@ private fun DiscoverSquadRow(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
             ) {
+                // LEFT: details
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = team.name,
                         style = MaterialTheme.typography.titleMedium
                     )
-                    Spacer(Modifier.height(2.dp))
+                    Spacer(Modifier.height(4.dp))
                     Text(
                         text = "${team.memberUids.size} players",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+
+                    if (team.preferredSkillLevel != null) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = "Skill: ${team.preferredSkillLevel}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (team.playDays.isNotEmpty()) {
+                        Text(
+                            text = "Days: ${team.playDays.joinToString(", ")}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (team.inviteOnly) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "Private squad (host invites only)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.tertiary
+                        )
+                    }
+
+                    Spacer(Modifier.height(4.dp))
                     when {
                         isOwner -> {
                             Text(
@@ -1099,29 +1597,104 @@ private fun DiscoverSquadRow(
                     }
                 }
 
-                when {
-                    isOwner || isMember -> {
-                        // no join actions
-                    }
+                Spacer(Modifier.width(12.dp))
 
-                    hasRequested -> {
-                        OutlinedButton(onClick = { onCancelRequest(team) }) {
-                            Text("Cancel")
+                // RIGHT: actions stacked
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    when {
+                        isOwner || isMember -> {
+                            // no join actions
                         }
-                    }
 
-                    else -> {
-                        Button(onClick = { onRequestJoin(team) }) {
-                            Text("Request")
+                        hasRequested -> {
+                            OutlinedButton(onClick = { onCancelRequest(team) }) {
+                                Text("Cancel")
+                            }
+                        }
+
+                        else -> {
+                            Button(onClick = { onRequestJoin(team) }) {
+                                Text("Request")
+                            }
                         }
                     }
                 }
             }
 
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(8.dp))
 
             TextButton(onClick = { onViewMembers(team) }) {
                 Text("View members")
+            }
+        }
+    }
+}
+
+@Composable
+private fun InviteRow(
+    invite: TeamsRepository.TeamInviteForUser,
+    onAccept: () -> Unit,
+    onDecline: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+        ) {
+            Text(
+                text = invite.teamName,
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "You’ve been invited to join this squad",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            if (invite.preferredSkillLevel != null) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = "Skill: ${invite.preferredSkillLevel}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (invite.playDays.isNotEmpty()) {
+                Text(
+                    text = "Days: ${invite.playDays.joinToString(", ")}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (invite.inviteOnly) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = "Private squad (host invites only)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.align(Alignment.End)
+            ) {
+                OutlinedButton(onClick = onDecline) {
+                    Text("Decline")
+                }
+                Button(onClick = onAccept) {
+                    Text("Accept")
+                }
             }
         }
     }

@@ -8,6 +8,8 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.Timestamp
 
 class TeamsRepository(
     private val db: FirebaseFirestore = FirebaseFirestore.getInstance(),
@@ -24,7 +26,10 @@ class TeamsRepository(
             name = doc.getString("name") ?: "",
             ownerUid = doc.getString("ownerUid") ?: "",
             memberUids = doc.get("memberUids") as? List<String> ?: emptyList(),
-            createdAt = doc.getTimestamp("createdAt")
+            createdAt = doc.getTimestamp("createdAt"),
+            preferredSkillLevel = doc.getString("preferredSkillLevel"),
+            playDays = doc.get("playDays") as? List<String> ?: emptyList(),
+            inviteOnly = doc.getBoolean("inviteOnly") ?: false
         )
     }
 
@@ -85,9 +90,12 @@ class TeamsRepository(
                 val all = snap?.documents
                     ?.map { doc -> mapTeam(doc) }
                     .orEmpty()
+
                 val filtered = all.filter { team ->
-                    !team.memberUids.contains(uid)
+                    !team.memberUids.contains(uid) &&
+                            !team.inviteOnly // NEW: host-invite-only squads are not discoverable
                 }
+
                 trySend(filtered)
             }
 
@@ -120,15 +128,23 @@ class TeamsRepository(
     /**
      * Create a team with the current user as owner and first member.
      */
-    suspend fun createTeam(name: String): String {
+    suspend fun createTeam(
+        name: String,
+        preferredSkillLevel: String?,
+        playDays: List<String>,
+        inviteOnly: Boolean
+    ): String {
         val uid = uidOrThrow()
         val ref = db.collection("teams").document()
         val data = mapOf(
-            // REMOVE: "id" to ref.id,
             "name" to name,
             "ownerUid" to uid,
             "memberUids" to listOf(uid),
-            "createdAt" to com.google.firebase.Timestamp.now()
+            "createdAt" to com.google.firebase.Timestamp.now(),
+            // NEW
+            "preferredSkillLevel" to preferredSkillLevel,
+            "playDays" to playDays,
+            "inviteOnly" to inviteOnly
         )
         ref.set(data).await()
         return ref.id
@@ -354,4 +370,215 @@ class TeamsRepository(
             tx.delete(reqDocRef)
         }.await()
     }
+
+    /**
+     * Edit an existing squad (owner-only).
+     * Updates name, skill, play days, and privacy.
+     */
+    suspend fun updateTeam(
+        teamId: String,
+        name: String,
+        preferredSkillLevel: String?,
+        playDays: List<String>,
+        inviteOnly: Boolean
+    ) {
+        val uid = uidOrThrow()
+        val ref = db.collection("teams").document(teamId)
+
+        db.runTransaction { tx ->
+            val snap = tx.get(ref)
+            if (!snap.exists()) throw IllegalStateException("Squad not found")
+
+            val ownerUid = snap.getString("ownerUid") ?: ""
+            if (ownerUid != uid) throw IllegalAccessException("Not team owner")
+
+            // Build updates map
+            val updates = mutableMapOf<String, Any>(
+                "name" to name,
+                "playDays" to playDays,
+                "inviteOnly" to inviteOnly
+            )
+
+            // If preferredSkillLevel is null, clear the field; otherwise set it
+            if (preferredSkillLevel != null) {
+                updates["preferredSkillLevel"] = preferredSkillLevel
+            } else {
+                updates["preferredSkillLevel"] = FieldValue.delete()
+            }
+
+            tx.update(ref, updates as Map<String, Any>)
+        }.await()
+    }
+
+    // -------- Squad Invites (owner → player) --------
+
+    data class TeamInviteForUser(
+        val inviteId: String,
+        val teamId: String,
+        val teamName: String,
+        val preferredSkillLevel: String?,
+        val playDays: List<String>,
+        val inviteOnly: Boolean
+    )
+
+    /**
+     * Live invites for the current user (as player).
+     */
+    fun getInvitesForCurrentUser(): Flow<List<TeamInviteForUser>> = callbackFlow {
+        val uid = uidOrThrow()
+        val reg = db.collection("teamInvites")
+            .whereEqualTo("uid", uid)
+            .addSnapshotListener { snap, err ->
+                if (err != null) {
+                    close(err)
+                    return@addSnapshotListener
+                }
+
+                val invites = snap?.documents
+                    ?.mapNotNull { doc ->
+                        val status = doc.getString("status") ?: "pending"
+                        if (status != "pending") return@mapNotNull null
+
+                        val teamId = doc.getString("teamId") ?: return@mapNotNull null
+                        val teamName = doc.getString("teamName") ?: "Unnamed squad"
+                        val skill = doc.getString("preferredSkillLevel")
+                        val playDays = doc.get("playDays") as? List<String> ?: emptyList()
+                        val inviteOnly = doc.getBoolean("inviteOnly") ?: false
+
+                        TeamInviteForUser(
+                            inviteId = doc.id,
+                            teamId = teamId,
+                            teamName = teamName,
+                            preferredSkillLevel = skill,
+                            playDays = playDays,
+                            inviteOnly = inviteOnly
+                        )
+                    }
+                    .orEmpty()
+
+                trySend(invites)
+            }
+
+        awaitClose { reg.remove() }
+    }
+
+    /**
+     * Owner: send an invite to a player by username.
+     * (We assume user docs are stored under /users/{uid} with a `username` field.)
+     */
+    suspend fun sendTeamInviteByUsername(teamId: String, username: String) {
+        val ownerUid = uidOrThrow()
+
+        // Make sure the squad exists and I'm the owner
+        val teamRef = db.collection("teams").document(teamId)
+        val teamSnap = teamRef.get().await()
+        if (!teamSnap.exists()) throw IllegalStateException("Squad not found")
+
+        val owner = teamSnap.getString("ownerUid") ?: ""
+        if (owner != ownerUid) throw IllegalAccessException("Not squad owner")
+
+        // Look up the player by username
+        val userSnap = db.collection("users")
+            .whereEqualTo("username", username)
+            .limit(1)
+            .get()
+            .await()
+
+        val userDoc = userSnap.documents.firstOrNull()
+            ?: throw IllegalStateException("No player with that username")
+
+        val targetUid = userDoc.id
+
+        // Don't invite if already in squad
+        val members = teamSnap.get("memberUids") as? List<String> ?: emptyList()
+        if (members.contains(targetUid)) {
+            throw IllegalStateException("That player is already in this squad")
+        }
+
+        // Don't double-invite
+        val existing = db.collection("teamInvites")
+            .whereEqualTo("teamId", teamId)
+            .whereEqualTo("uid", targetUid)
+            .whereEqualTo("status", "pending")
+            .limit(1)
+            .get()
+            .await()
+
+        if (!existing.isEmpty) {
+            throw IllegalStateException("You’ve already invited this player")
+        }
+
+        // Copy some display info from the squad so the invite tab can show it
+        val teamName = teamSnap.getString("name") ?: "Unnamed squad"
+        val preferredSkill = teamSnap.getString("preferredSkillLevel")
+        val playDays = teamSnap.get("playDays") as? List<String> ?: emptyList()
+        val inviteOnly = teamSnap.getBoolean("inviteOnly") ?: false
+
+        val inviteRef = db.collection("teamInvites").document()
+        val data = mapOf(
+            "teamId" to teamId,
+            "uid" to targetUid,
+            "status" to "pending",
+            "createdAt" to Timestamp.now(),
+            "teamName" to teamName,
+            "preferredSkillLevel" to preferredSkill,
+            "playDays" to playDays,
+            "inviteOnly" to inviteOnly
+        )
+
+        inviteRef.set(data).await()
+    }
+
+    /**
+     * Player: accept an invite (adds me to memberUids).
+     */
+    suspend fun acceptInvite(inviteId: String) {
+        val uid = uidOrThrow()
+        val inviteRef = db.collection("teamInvites").document(inviteId)
+
+        db.runTransaction { tx ->
+            val inviteSnap = tx.get(inviteRef)
+            if (!inviteSnap.exists()) throw IllegalStateException("Invite not found")
+
+            val inviteUid = inviteSnap.getString("uid") ?: ""
+            if (inviteUid != uid) throw IllegalAccessException("Not your invite")
+
+            val status = inviteSnap.getString("status") ?: "pending"
+            if (status != "pending") return@runTransaction
+
+            val teamId = inviteSnap.getString("teamId")
+                ?: throw IllegalStateException("Invite missing teamId")
+
+            val teamRef = db.collection("teams").document(teamId)
+            val teamSnap = tx.get(teamRef)
+            if (!teamSnap.exists()) throw IllegalStateException("Squad not found")
+
+            val members = teamSnap.get("memberUids") as? List<String> ?: emptyList()
+            if (!members.contains(uid)) {
+                tx.update(teamRef, "memberUids", members + uid)
+            }
+
+            tx.update(inviteRef, "status", "accepted")
+        }.await()
+    }
+
+    /**
+     * Player: decline an invite.
+     */
+    suspend fun declineInvite(inviteId: String) {
+        val uid = uidOrThrow()
+        val inviteRef = db.collection("teamInvites").document(inviteId)
+
+        db.runTransaction { tx ->
+            val inviteSnap = tx.get(inviteRef)
+            if (!inviteSnap.exists()) return@runTransaction
+
+            val inviteUid = inviteSnap.getString("uid") ?: ""
+            if (inviteUid != uid) throw IllegalAccessException("Not your invite")
+
+            tx.update(inviteRef, "status", "declined")
+        }.await()
+    }
+
+
 }

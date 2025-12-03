@@ -457,6 +457,107 @@ export const notifyRunCancelled = onDocumentUpdated("runs/{runId}", async (event
   }
 });
 
+export const notifyTeamInviteCreated = onDocumentCreated(
+  "teamInvites/{inviteId}",
+  async (event) => {
+    const inviteId = event.params.inviteId;
+    const invite = event.data?.data() as any;
+
+    if (!invite) {
+      logger.warn("[notifyTeamInviteCreated] no invite data", { inviteId });
+      return;
+    }
+
+    // your docs currently use "uid"
+    const uid =
+      (invite.userId as string | undefined) ??   // future-proof if you later change field name
+      (invite.uid as string | undefined) ??      // current field
+      "";
+
+    if (!uid) {
+      logger.warn("[notifyTeamInviteCreated] invite missing uid/userId", {
+        inviteId,
+        invite,
+      });
+      return;
+    }
+
+    const teamId = (invite.teamId as string | undefined) ?? "";
+    const teamName =
+      (invite.teamName as string | undefined) ??
+      (invite.name as string | undefined) ??
+      "A squad";
+
+    const ownerName = (invite.ownerName as string | undefined) ?? "";
+
+    // ---- Collect FCM tokens for that user ----
+    const tokens: string[] = [];
+    try {
+      const snap = await db
+        .collection("users")
+        .doc(uid)
+        .collection("tokens")
+        .get();
+
+      snap.docs.forEach((doc) => {
+        const t = doc.id;
+        if (t && typeof t === "string") tokens.push(t);
+      });
+    } catch (err) {
+      logger.error("[notifyTeamInviteCreated] error fetching tokens", { uid, err });
+      return;
+    }
+
+    if (!tokens.length) {
+      logger.info("[notifyTeamInviteCreated] no tokens for user, skipping", { uid });
+      return;
+    }
+
+    // ---- Nice SYSTEM notification for background ----
+    const title =
+      ownerName && teamName
+        ? `${ownerName} invited you to join ${teamName}`
+        : teamName
+        ? `Squad invite: ${teamName}`
+        : "New squad invite";
+
+    const body = "Tap to view your squad invites in BallUp";
+
+    const payload: admin.messaging.MulticastMessage = {
+      tokens,
+      notification: {
+        title,
+        body,
+      },
+      data: {
+        type: "team_invite",
+        inviteId,
+        teamId,
+        teamName,
+        ownerName,
+      },
+      android: {
+        priority: "high",   // 🔥 keep high priority, but NO channelId here
+      },
+    };
+
+    try {
+      const resp = await messaging.sendEachForMulticast(payload);
+      logger.info("[notifyTeamInviteCreated] sent squad invite notif", {
+        uid,
+        inviteId,
+        teamId,
+        teamName,
+        success: resp.successCount,
+        failure: resp.failureCount,
+      });
+    } catch (err) {
+      logger.error("[notifyTeamInviteCreated] sendEachForMulticast failed", { err });
+    }
+  }
+);
+
+
 
 
 

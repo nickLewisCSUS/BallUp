@@ -90,6 +90,23 @@ fun InAppAlertsOverlay(nav: NavHostController) {
                         }
                     }
                 }
+
+                // ✅ NEW branch so `when` is exhaustive
+                is InAppAlert.TeamInvite -> {
+                    val res = snack.showSnackbar(
+                        message = "${evt.title} · Check your invites tab",
+                        actionLabel = "Open",
+                        withDismissAction = true,
+                        duration = SnackbarDuration.Short
+                    )
+                    if (res == SnackbarResult.ActionPerformed) {
+                        // adjust route string if your Teams route is named differently
+                        nav.navigate("teams") {
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                }
             }
         }
     }

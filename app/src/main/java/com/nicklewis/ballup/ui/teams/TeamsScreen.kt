@@ -2,8 +2,16 @@
 
 package com.nicklewis.ballup.ui.teams
 
-import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,17 +20,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -36,7 +38,6 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -47,298 +48,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.lifecycle.viewModelScope
-import com.google.firebase.auth.FirebaseAuth
-import com.nicklewis.ballup.data.TeamsRepository
 import com.nicklewis.ballup.data.TeamsRepository.PendingTeamRequest
 import com.nicklewis.ballup.model.Team
 import com.nicklewis.ballup.model.UserProfile
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-
-// ---------- UI STATE + VIEWMODEL ----------
-
-data class TeamsUiState(
-    val isLoading: Boolean = true,
-    val teams: List<Team> = emptyList(),              // squads I’m in
-    val discoverableTeams: List<Team> = emptyList(),  // squads I can request
-    val pendingJoinTeamIds: Set<String> = emptySet(), // teams I’ve requested to join
-    val incomingInvites: List<TeamsRepository.TeamInviteForUser> = emptyList(), // NEW
-    val errorMessage: String? = null,
-    val currentUid: String = ""
-)
-
-class TeamsViewModel(
-    private val repo: TeamsRepository = TeamsRepository(),
-    private val auth: FirebaseAuth = FirebaseAuth.getInstance()
-) : ViewModel() {
-
-    private val _uiState = MutableStateFlow(TeamsUiState())
-    val uiState: StateFlow<TeamsUiState> = _uiState.asStateFlow()
-
-    init {
-        observeMyTeams()
-        observeDiscoverableTeams()
-        observeMyPendingTeamRequests()
-        observeInvitesForMe()
-    }
-
-    private fun observeMyTeams() {
-        viewModelScope.launch {
-            repo.getTeamsForCurrentUser().collectLatest { teams ->
-                val uid = auth.currentUser?.uid.orEmpty()
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        teams = teams,
-                        currentUid = uid,
-                        errorMessage = null
-                    )
-                }
-            }
-        }
-    }
-
-    private fun observeDiscoverableTeams() {
-        viewModelScope.launch {
-            repo.getDiscoverableTeams().collectLatest { teams ->
-                _uiState.update { it.copy(discoverableTeams = teams) }
-            }
-        }
-    }
-
-    private fun observeMyPendingTeamRequests() {
-        viewModelScope.launch {
-            repo.getPendingJoinRequestsForCurrentUser().collectLatest { pendingIds ->
-                _uiState.update { it.copy(pendingJoinTeamIds = pendingIds.toSet()) }
-            }
-        }
-    }
-
-    private fun observeInvitesForMe() {
-        viewModelScope.launch {
-            repo.getInvitesForCurrentUser().collectLatest { invites ->
-                _uiState.update { it.copy(incomingInvites = invites) }
-            }
-        }
-    }
-
-    fun createTeam(
-        name: String,
-        preferredSkillLevel: String?,
-        playDays: List<String>,
-        inviteOnly: Boolean,
-        onDone: (Boolean, String?) -> Unit
-    ) {
-        viewModelScope.launch {
-            try {
-                repo.createTeam(name.trim(), preferredSkillLevel, playDays, inviteOnly)
-                onDone(true, null)
-            } catch (e: Exception) {
-                onDone(false, e.message ?: "Failed to create squad")
-            }
-        }
-    }
-
-    fun updateTeam(
-        teamId: String,
-        name: String,
-        preferredSkillLevel: String?,
-        playDays: List<String>,
-        inviteOnly: Boolean,
-        onDone: (Boolean, String?) -> Unit
-    ) {
-        viewModelScope.launch {
-            try {
-                repo.updateTeam(
-                    teamId = teamId,
-                    name = name.trim(),
-                    preferredSkillLevel = preferredSkillLevel,
-                    playDays = playDays,
-                    inviteOnly = inviteOnly
-                )
-                onDone(true, null)
-            } catch (e: Exception) {
-                onDone(false, e.message ?: "Failed to update squad")
-            }
-        }
-    }
-
-    fun renameTeam(teamId: String, newName: String, onDone: (Boolean, String?) -> Unit) {
-        viewModelScope.launch {
-            try {
-                repo.renameTeam(teamId, newName.trim())
-                onDone(true, null)
-            } catch (e: Exception) {
-                onDone(false, e.message ?: "Failed to rename squad")
-            }
-        }
-    }
-
-    fun deleteTeam(teamId: String, onDone: (Boolean, String?) -> Unit) {
-        viewModelScope.launch {
-            try {
-                repo.deleteTeam(teamId)
-                onDone(true, null)
-            } catch (e: Exception) {
-                onDone(false, e.message ?: "Failed to delete squad")
-            }
-        }
-    }
-
-    fun loadMembersFor(
-        team: Team,
-        onDone: (Boolean, List<UserProfile>?, String?) -> Unit
-    ) {
-        viewModelScope.launch {
-            try {
-                val profiles = repo.getMembers(team.memberUids)
-                onDone(true, profiles, null)
-            } catch (e: Exception) {
-                onDone(false, null, e.message ?: "Failed to load squad members")
-            }
-        }
-    }
-
-    // ---- join / leave / cancel ----
-
-    fun requestToJoinTeam(teamId: String, onDone: (Boolean, String?) -> Unit) {
-        val uid = auth.currentUser?.uid
-        if (uid == null) {
-            onDone(false, "Not signed in")
-            return
-        }
-        viewModelScope.launch {
-            try {
-                repo.requestToJoinTeam(teamId, uid)
-                _uiState.update {
-                    it.copy(pendingJoinTeamIds = it.pendingJoinTeamIds + teamId)
-                }
-                onDone(true, null)
-            } catch (e: Exception) {
-                onDone(false, e.message ?: "Couldn't request to join squad")
-            }
-        }
-    }
-
-    fun cancelJoinRequest(teamId: String, onDone: (Boolean, String?) -> Unit) {
-        val uid = auth.currentUser?.uid
-        if (uid == null) {
-            onDone(false, "Not signed in")
-            return
-        }
-        viewModelScope.launch {
-            try {
-                repo.cancelJoinRequest(teamId, uid)
-                _uiState.update {
-                    it.copy(pendingJoinTeamIds = it.pendingJoinTeamIds - teamId)
-                }
-                onDone(true, null)
-            } catch (e: Exception) {
-                onDone(false, e.message ?: "Couldn't cancel join request")
-            }
-        }
-    }
-
-    fun leaveTeam(teamId: String, onDone: (Boolean, String?) -> Unit) {
-        val uid = auth.currentUser?.uid
-        if (uid == null) {
-            onDone(false, "Not signed in")
-            return
-        }
-        viewModelScope.launch {
-            try {
-                repo.leaveTeam(teamId, uid)
-                onDone(true, null)
-            } catch (e: Exception) {
-                onDone(false, e.message ?: "Couldn't leave squad")
-            }
-        }
-    }
-
-    // ---- host approval helpers ----
-
-    fun loadJoinRequestsFor(
-        team: Team,
-        onDone: (Boolean, List<PendingTeamRequest>?, String?) -> Unit
-    ) {
-        viewModelScope.launch {
-            try {
-                val pending = repo.getPendingRequestsForTeam(team.id)
-                onDone(true, pending, null)
-            } catch (e: Exception) {
-                onDone(false, null, e.message ?: "Failed to load join requests")
-            }
-        }
-    }
-
-    fun approveJoin(teamId: String, uid: String, onDone: (Boolean, String?) -> Unit) {
-        viewModelScope.launch {
-            try {
-                repo.approveJoinRequest(teamId, uid)
-                onDone(true, null)
-            } catch (e: Exception) {
-                onDone(false, e.message ?: "Failed to approve request")
-            }
-        }
-    }
-
-    fun denyJoin(teamId: String, uid: String, onDone: (Boolean, String?) -> Unit) {
-        viewModelScope.launch {
-            try {
-                repo.denyJoinRequest(teamId, uid)
-                onDone(true, null)
-            } catch (e: Exception) {
-                onDone(false, e.message ?: "Failed to deny request")
-            }
-        }
-    }
-
-    // ---- invites: owner -> player ----
-
-    fun sendInviteByUsername(
-        teamId: String,
-        username: String,
-        onDone: (Boolean, String?) -> Unit
-    ) {
-        viewModelScope.launch {
-            try {
-                repo.sendTeamInviteByUsername(teamId, username.trim())
-                onDone(true, null)
-            } catch (e: Exception) {
-                onDone(false, e.message ?: "Failed to send invite")
-            }
-        }
-    }
-
-    fun acceptInvite(inviteId: String, onDone: (Boolean, String?) -> Unit) {
-        viewModelScope.launch {
-            try {
-                repo.acceptInvite(inviteId)
-                onDone(true, null)
-            } catch (e: Exception) {
-                onDone(false, e.message ?: "Failed to accept invite")
-            }
-        }
-    }
-
-    fun declineInvite(inviteId: String, onDone: (Boolean, String?) -> Unit) {
-        viewModelScope.launch {
-            try {
-                repo.declineInvite(inviteId)
-                onDone(true, null)
-            } catch (e: Exception) {
-                onDone(false, e.message ?: "Failed to decline invite")
-            }
-        }
-    }
-}
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 
 // ---------- SCREEN ----------
 
@@ -421,7 +137,10 @@ fun TeamsScreen(
         floatingActionButton = {
             if (selectedTab == 0) {
                 FloatingActionButton(onClick = { showCreateDialog = true }) {
-                    Icon(Icons.Default.Add, contentDescription = "Create squad")
+                    androidx.compose.material3.Icon(
+                        Icons.Default.Add,
+                        contentDescription = "Create squad"
+                    )
                 }
             }
         }
@@ -478,7 +197,21 @@ fun TeamsScreen(
                 Tab(
                     selected = selectedTab == 2,
                     onClick = { selectedTab = 2 },
-                    text = { Text("Invites") }
+                    text = {
+                        BadgedBox(
+                            badge = {
+                                val count = uiState.incomingInvites.size
+                                if (count > 0) {
+                                    // Number badge; if you want just a dot, remove Text()
+                                    Badge {
+                                        Text(if (count > 9) "9+" else count.toString())
+                                    }
+                                }
+                            }
+                        ) {
+                            Text("Invites")
+                        }
+                    }
                 )
             }
 
@@ -1366,364 +1099,5 @@ fun TeamsScreen(
                 Spacer(Modifier.height(8.dp))
             }
         }
-    }
-}
-
-// ---------- ROWS ----------
-
-@Composable
-private fun SquadRow(
-    team: Team,
-    isOwner: Boolean,
-    onViewMembers: (Team) -> Unit,
-    onEdit: (Team) -> Unit,
-    onDelete: (Team) -> Unit,
-    onLeave: (Team) -> Unit,
-    onViewRequests: (Team) -> Unit,
-    onInvite: (Team) -> Unit,
-    currentUid: String
-) {
-    val isMemberButNotOwner = !isOwner && team.memberUids.contains(currentUid)
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
-            ) {
-                // LEFT: details
-                Column(
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text(
-                        text = team.name,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "${team.memberUids.size} players",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    if (team.preferredSkillLevel != null) {
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            text = "Skill: ${team.preferredSkillLevel}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    if (team.playDays.isNotEmpty()) {
-                        Text(
-                            text = "Days: ${team.playDays.joinToString(", ")}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    if (team.inviteOnly) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = "Private squad (host invites only)",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.tertiary
-                        )
-                    }
-
-                    Spacer(Modifier.height(4.dp))
-                    when {
-                        isOwner -> {
-                            Text(
-                                text = "You’re the owner",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-
-                        isMemberButNotOwner -> {
-                            Text(
-                                text = "You’re in this squad",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.secondary
-                            )
-                        }
-                    }
-                }
-
-                Spacer(Modifier.width(12.dp))
-
-                // RIGHT: actions stacked so they don't squeeze the content
-                Column(
-                    horizontalAlignment = Alignment.End,
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    if (isOwner) {
-                        Row {
-                            IconButton(onClick = { onEdit(team) }) {
-                                Icon(
-                                    imageVector = Icons.Default.Edit,
-                                    contentDescription = "Edit squad"
-                                )
-                            }
-                            IconButton(onClick = { onDelete(team) }) {
-                                Icon(
-                                    imageVector = Icons.Default.Delete,
-                                    contentDescription = "Delete squad"
-                                )
-                            }
-                        }
-                        OutlinedButton(onClick = { onViewRequests(team) }) {
-                            Text("View requests")
-                        }
-                        OutlinedButton(onClick = { onInvite(team) }) {
-                            Text("Invite players")
-                        }
-                    } else if (isMemberButNotOwner) {
-                        OutlinedButton(onClick = { onLeave(team) }) {
-                            Text("Leave")
-                        }
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            TextButton(onClick = { onViewMembers(team) }) {
-                Text("View members")
-            }
-        }
-    }
-}
-
-@Composable
-private fun DiscoverSquadRow(
-    team: Team,
-    isOwner: Boolean,
-    isMember: Boolean,
-    hasRequested: Boolean,
-    onRequestJoin: (Team) -> Unit,
-    onCancelRequest: (Team) -> Unit,
-    onViewMembers: (Team) -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
-            ) {
-                // LEFT: details
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = team.name,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "${team.memberUids.size} players",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    if (team.preferredSkillLevel != null) {
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            text = "Skill: ${team.preferredSkillLevel}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    if (team.playDays.isNotEmpty()) {
-                        Text(
-                            text = "Days: ${team.playDays.joinToString(", ")}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    if (team.inviteOnly) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = "Private squad (host invites only)",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.tertiary
-                        )
-                    }
-
-                    Spacer(Modifier.height(4.dp))
-                    when {
-                        isOwner -> {
-                            Text(
-                                text = "You own this squad",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-
-                        isMember -> {
-                            Text(
-                                text = "Already in this squad",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.secondary
-                            )
-                        }
-
-                        hasRequested -> {
-                            Text(
-                                text = "Request pending",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.tertiary
-                            )
-                        }
-                    }
-                }
-
-                Spacer(Modifier.width(12.dp))
-
-                // RIGHT: actions stacked
-                Column(
-                    horizontalAlignment = Alignment.End,
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    when {
-                        isOwner || isMember -> {
-                            // no join actions
-                        }
-
-                        hasRequested -> {
-                            OutlinedButton(onClick = { onCancelRequest(team) }) {
-                                Text("Cancel")
-                            }
-                        }
-
-                        else -> {
-                            Button(onClick = { onRequestJoin(team) }) {
-                                Text("Request")
-                            }
-                        }
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            TextButton(onClick = { onViewMembers(team) }) {
-                Text("View members")
-            }
-        }
-    }
-}
-
-@Composable
-private fun InviteRow(
-    invite: TeamsRepository.TeamInviteForUser,
-    onAccept: () -> Unit,
-    onDecline: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp)
-        ) {
-            Text(
-                text = invite.teamName,
-                style = MaterialTheme.typography.titleMedium
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = "You’ve been invited to join this squad",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            if (invite.preferredSkillLevel != null) {
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = "Skill: ${invite.preferredSkillLevel}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            if (invite.playDays.isNotEmpty()) {
-                Text(
-                    text = "Days: ${invite.playDays.joinToString(", ")}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            if (invite.inviteOnly) {
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = "Private squad (host invites only)",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.tertiary
-                )
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.align(Alignment.End)
-            ) {
-                OutlinedButton(onClick = onDecline) {
-                    Text("Decline")
-                }
-                Button(onClick = onAccept) {
-                    Text("Accept")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun MemberRow(profile: UserProfile) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 4.dp, vertical = 4.dp)
-    ) {
-        Text(
-            text = profile.username.ifBlank { profile.displayName ?: "Unnamed player" },
-            style = MaterialTheme.typography.bodyLarge
-        )
-        if (!profile.displayName.isNullOrBlank() &&
-            profile.displayName != profile.username
-        ) {
-            Text(
-                text = profile.displayName,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        Text(
-            text = "Skill: ${profile.skillLevel}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }

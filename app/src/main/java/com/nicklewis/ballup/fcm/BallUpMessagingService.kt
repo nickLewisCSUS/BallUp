@@ -58,23 +58,23 @@ class BallUpMessagingService : FirebaseMessagingService() {
         deeplinkRunId: String
     ) {
         val ctx = applicationContext
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+        CoroutineScope(Dispatchers.IO).launch {
             val allowWhileForeground = try {
                 com.nicklewis.ballup.data.LocalPrefsStore(ctx).prefsFlow.first().notifyWhileForeground
             } catch (_: Throwable) { false }
 
             val inForeground = applicationIsInForeground()
             if (!inForeground || allowWhileForeground) {
-                val intent = android.content.Intent(ctx, com.nicklewis.ballup.MainActivity::class.java).apply {
-                    flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
+                val intent = Intent(ctx, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                     putExtra("deeplink_runId", deeplinkRunId)
                 }
-                val pi = android.app.PendingIntent.getActivity(
+                val pi = PendingIntent.getActivity(
                     ctx, 1001, intent,
-                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
                 ensureChannel(channelId, "Run Alerts")
-                val notif = androidx.core.app.NotificationCompat.Builder(ctx, channelId)
+                val notif = NotificationCompat.Builder(ctx, channelId)
                     .setSmallIcon(notificationIcon())
                     .setContentTitle(title)
                     .setContentText(text)
@@ -82,19 +82,18 @@ class BallUpMessagingService : FirebaseMessagingService() {
                     .setAutoCancel(true)
                     .build()
 
-                if (android.os.Build.VERSION.SDK_INT >= 33 &&
-                    androidx.core.content.ContextCompat.checkSelfPermission(
-                        ctx, android.Manifest.permission.POST_NOTIFICATIONS
-                    ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                if (Build.VERSION.SDK_INT >= 33 &&
+                    ContextCompat.checkSelfPermission(
+                        ctx, Manifest.permission.POST_NOTIFICATIONS
+                    ) != PackageManager.PERMISSION_GRANTED
                 ) return@launch
-                val nm = androidx.core.app.NotificationManagerCompat.from(ctx)
+                val nm = NotificationManagerCompat.from(ctx)
                 if (!nm.areNotificationsEnabled()) return@launch
 
                 nm.notify(9001, notif)
             }
         }
     }
-
 
     override fun onMessageReceived(msg: RemoteMessage) {
         android.util.Log.d("FCM", "onMessageReceived data=${msg.data} notif=${msg.notification}")
@@ -103,6 +102,80 @@ class BallUpMessagingService : FirebaseMessagingService() {
         val courtName = data["courtName"] ?: ""
         val runId = data["runId"] ?: ""
         val slotsLeft = data["slotsLeft"] ?: ""
+
+        // --- NEW: squad invite ---
+        if (type == "team_invite") {
+            val teamId   = data["teamId"].orEmpty()
+            val teamName = data["teamName"].orEmpty()
+            val inviteId = data["inviteId"].orEmpty()
+            val ownerName = data["ownerName"].orEmpty()
+
+            val title = if (teamName.isNotEmpty()) {
+                "Squad invite: $teamName"
+            } else {
+                "New squad invite"
+            }
+
+            val body = if (ownerName.isNotEmpty()) {
+                "$ownerName invited you to join this squad."
+            } else {
+                "You’ve been invited to join this squad."
+            }
+
+            // In-app banner
+            NotifBus.emit(
+                InAppAlert.TeamInvite(
+                    title = title,
+                    teamName = teamName,
+                    teamId = teamId,
+                    inviteId = inviteId
+                )
+            )
+
+            // System notification
+            val ctx = applicationContext
+            CoroutineScope(Dispatchers.IO).launch {
+                val allowWhileForeground = try {
+                    com.nicklewis.ballup.data.LocalPrefsStore(ctx)
+                        .prefsFlow.first().notifyWhileForeground
+                } catch (_: Throwable) { false }
+
+                val inForeground = applicationIsInForeground()
+                if (!inForeground || allowWhileForeground) {
+                    // Deep-link → Teams screen, invites tab
+                    val intent = Intent(ctx, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        putExtra("deeplink_tab", "teams_invites")
+                    }
+                    val pi = PendingIntent.getActivity(
+                        ctx, 2001, intent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+
+                    val channelId = "teams"
+                    ensureChannel(channelId, "Squad Alerts")
+
+                    val notif = NotificationCompat.Builder(ctx, channelId)
+                        .setSmallIcon(notificationIcon())
+                        .setContentTitle(title)
+                        .setContentText(body)
+                        .setContentIntent(pi)
+                        .setAutoCancel(true)
+                        .build()
+
+                    if (Build.VERSION.SDK_INT >= 33 &&
+                        ContextCompat.checkSelfPermission(
+                            ctx,
+                            Manifest.permission.POST_NOTIFICATIONS
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) return@launch
+                    if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return@launch
+
+                    NotificationManagerCompat.from(ctx).notify(2001, notif)
+                }
+            }
+            return
+        }
 
         // --- Upcoming run reminder (1h / 10m before) ---
         if (type == "run_upcoming" && runId.isNotEmpty()) {
@@ -130,7 +203,6 @@ class BallUpMessagingService : FirebaseMessagingService() {
                 }
             }
 
-            // In-app banner
             NotifBus.emit(
                 InAppAlert.RunUpcoming(
                     title = titleNotif,
@@ -140,7 +212,6 @@ class BallUpMessagingService : FirebaseMessagingService() {
                 )
             )
 
-            // System notification
             postSystemNotificationIfAllowed(
                 channelId = "runs",
                 title = titleNotif,
@@ -154,12 +225,8 @@ class BallUpMessagingService : FirebaseMessagingService() {
             val title = if (slotsLeft == "1") "A spot opened" else "$slotsLeft spots left"
             val text  = if (courtName.isNotEmpty()) courtName else "Tap to view"
 
-            // 1) Always emit in-app banner (no-op if app not visible)
             NotifBus.emit(InAppAlert.RunSpots(title, courtName, runId))
 
-            // 2) Post a SYSTEM notification only if:
-            //    - app is backgrounded, or
-            //    - user enabled "notify while foreground"
             val ctx = applicationContext
             CoroutineScope(Dispatchers.IO).launch {
                 val allowWhileForeground = try {
@@ -169,8 +236,6 @@ class BallUpMessagingService : FirebaseMessagingService() {
 
                 val inForeground = applicationIsInForeground()
                 if (!inForeground || allowWhileForeground) {
-
-                    // Deep link intent → run screen
                     val intent = Intent(ctx, MainActivity::class.java).apply {
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                         putExtra("deeplink_runId", runId)
@@ -205,7 +270,6 @@ class BallUpMessagingService : FirebaseMessagingService() {
             return
         }
 
-        // --- New run created / opened ---
         if (type == "run_created" || type == "run_open") {
             val courtNameLocal = data["courtName"].orEmpty()
             val runIdLocal = data["runId"].orEmpty()
@@ -220,10 +284,8 @@ class BallUpMessagingService : FirebaseMessagingService() {
             val title = "New run at ${courtNameLocal.ifEmpty { "this court" }}"
             val text  = "$mode • up to $maxPlayers • starts $timeText"
 
-            // In-app banner (Snackbar overlay)
             NotifBus.emit(InAppAlert.RunCreated(title, courtNameLocal, runIdLocal, timeText))
 
-            // System notification (same checks as before)
             postSystemNotificationIfAllowed(
                 channelId = "runs",
                 title = title,
@@ -233,9 +295,6 @@ class BallUpMessagingService : FirebaseMessagingService() {
             return
         }
 
-        // 👇👇👇 NEW BLOCK GOES *HERE* — before the fallback
-
-        // --- Run cancelled / ended ---
         if ((type == "run_cancelled" || type == "run_ended") && runId.isNotEmpty()) {
             val runName = data["runName"].orEmpty()
 
@@ -255,7 +314,6 @@ class BallUpMessagingService : FirebaseMessagingService() {
                 }
             }
 
-            // In-app banner
             NotifBus.emit(
                 InAppAlert.RunCancelled(
                     title = title,
@@ -264,7 +322,6 @@ class BallUpMessagingService : FirebaseMessagingService() {
                 )
             )
 
-            // System notification (deep links into the run details)
             postSystemNotificationIfAllowed(
                 channelId = "runs",
                 title = title,
@@ -274,9 +331,9 @@ class BallUpMessagingService : FirebaseMessagingService() {
             return
         }
 
-        // --- Fallback for notification-only messages (unchanged) ---
-        val title = msg.notification?.title ?: "BallUp"
-        val body  = msg.notification?.body  ?: "New update"
+        // Fallback
+        val fbTitle = msg.notification?.title ?: "BallUp"
+        val fbBody  = msg.notification?.body  ?: "New update"
         val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channelId = "runs"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -285,8 +342,8 @@ class BallUpMessagingService : FirebaseMessagingService() {
         }
         val fallback = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(notificationIcon())
-            .setContentTitle(title)
-            .setContentText(body)
+            .setContentTitle(fbTitle)
+            .setContentText(fbBody)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
@@ -302,7 +359,6 @@ class BallUpMessagingService : FirebaseMessagingService() {
         )
     }
 
-
     private fun ensureChannel(id: String, name: String) {
         if (Build.VERSION.SDK_INT >= 26) {
             val mgr = getSystemService(NotificationManager::class.java)
@@ -313,7 +369,6 @@ class BallUpMessagingService : FirebaseMessagingService() {
     }
 
     private fun notificationIcon(): Int {
-        // Use your vector if present; else fall back to the app icon
         return try { R.drawable.ic_notification } catch (_: Exception) { R.mipmap.ic_launcher }
     }
 

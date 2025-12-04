@@ -1,3 +1,4 @@
+// InAppAlertsOverlay.kt
 package com.nicklewis.ballup.nav
 
 import androidx.compose.foundation.layout.Box
@@ -18,7 +19,10 @@ fun InAppAlertsOverlay(nav: NavHostController) {
     val snack = remember { SnackbarHostState() }
 
     Box(Modifier.fillMaxSize()) {
-        SnackbarHost(hostState = snack, modifier = Modifier.align(Alignment.TopCenter))
+        SnackbarHost(
+            hostState = snack,
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
     }
 
     LaunchedEffect(Unit) {
@@ -91,7 +95,7 @@ fun InAppAlertsOverlay(nav: NavHostController) {
                     }
                 }
 
-                // ✅ NEW branch so `when` is exhaustive
+                // invite sent *to you* (player)
                 is InAppAlert.TeamInvite -> {
                     val res = snack.showSnackbar(
                         message = "${evt.title} · Check your invites tab",
@@ -100,7 +104,69 @@ fun InAppAlertsOverlay(nav: NavHostController) {
                         duration = SnackbarDuration.Short
                     )
                     if (res == SnackbarResult.ActionPerformed) {
-                        // adjust route string if your Teams route is named differently
+                        nav.navigate("teams") {
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                }
+
+                // your invite got accepted (owner view)
+                is InAppAlert.TeamInviteAccepted -> {
+                    val res = snack.showSnackbar(
+                        message = evt.message,
+                        actionLabel = "Open",
+                        withDismissAction = true,
+                        duration = SnackbarDuration.Short
+                    )
+                    if (res == SnackbarResult.ActionPerformed) {
+                        nav.navigate("teams") {
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                }
+
+                // someone requested to join your squad (owner view)
+                is InAppAlert.TeamJoinRequest -> {
+                    val res = snack.showSnackbar(
+                        message = "${evt.title} · ${evt.requesterName}",
+                        actionLabel = "Review",
+                        withDismissAction = true,
+                        duration = SnackbarDuration.Short
+                    )
+                    if (res == SnackbarResult.ActionPerformed) {
+                        nav.navigate("teams") {
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                }
+
+                // 🔹 NEW: your own join request was approved (player view)
+                is InAppAlert.TeamJoinApproved -> {
+                    val res = snack.showSnackbar(
+                        message = "${evt.title} · ${evt.message}",
+                        actionLabel = "Open",
+                        withDismissAction = true,
+                        duration = SnackbarDuration.Short
+                    )
+                    if (res == SnackbarResult.ActionPerformed) {
+                        nav.navigate("teams") {
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                }
+
+                is InAppAlert.TeamDeleted -> {
+                    val res = snack.showSnackbar(
+                        message = "${evt.title} · ${evt.message}",
+                        actionLabel = "Teams",
+                        withDismissAction = true,
+                        duration = SnackbarDuration.Short
+                    )
+                    if (res == SnackbarResult.ActionPerformed) {
                         nav.navigate("teams") {
                             launchSingleTop = true
                             restoreState = true

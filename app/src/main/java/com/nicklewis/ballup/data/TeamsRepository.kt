@@ -93,7 +93,7 @@ class TeamsRepository(
 
                 val filtered = all.filter { team ->
                     !team.memberUids.contains(uid) &&
-                            !team.inviteOnly // NEW: host-invite-only squads are not discoverable
+                            !team.inviteOnly // host-invite-only squads are not discoverable
                 }
 
                 trySend(filtered)
@@ -141,7 +141,6 @@ class TeamsRepository(
             "ownerUid" to uid,
             "memberUids" to listOf(uid),
             "createdAt" to com.google.firebase.Timestamp.now(),
-            // NEW
             "preferredSkillLevel" to preferredSkillLevel,
             "playDays" to playDays,
             "inviteOnly" to inviteOnly
@@ -206,7 +205,6 @@ class TeamsRepository(
 
     /**
      * Fetch user profiles for the given member UIDs.
-     * Simple implementation: one doc read per uid.
      */
     suspend fun getMembers(memberUids: List<String>): List<UserProfile> {
         if (memberUids.isEmpty()) return emptyList()
@@ -223,7 +221,6 @@ class TeamsRepository(
 
     /**
      * Player → request to join a squad.
-     * (We allow multiple docs for same teamId+uid for now; could de-dupe later.)
      */
     suspend fun requestToJoinTeam(teamId: String, uid: String) {
         val ref = db.collection("teamJoinRequests").document()
@@ -238,6 +235,8 @@ class TeamsRepository(
 
     /**
      * Player → cancel their pending join request for this squad.
+     * (Now we mark status = "cancelled" instead of deleting the doc,
+     *  so Cloud Functions can still see the history.)
      */
     suspend fun cancelJoinRequest(teamId: String, uid: String) {
         val snap = db.collection("teamJoinRequests")
@@ -248,8 +247,8 @@ class TeamsRepository(
             .get()
             .await()
 
-        val doc = snap.documents.firstOrNull()?.reference ?: return
-        doc.delete().await()
+        val docRef = snap.documents.firstOrNull()?.reference ?: return
+        docRef.update("status", "cancelled").await()
     }
 
     /**
@@ -282,7 +281,6 @@ class TeamsRepository(
 
     /**
      * Owner: load pending join requests for a given team.
-     * Returns list of (uid + UserProfile?).
      */
     suspend fun getPendingRequestsForTeam(teamId: String): List<PendingTeamRequest> {
         val requestsSnap = db.collection("teamJoinRequests")
@@ -308,13 +306,13 @@ class TeamsRepository(
     }
 
     /**
-     * Owner: approve a request → add to memberUids and delete the joinRequest doc.
+     * Owner: approve a request → add to memberUids and mark request as approved.
      */
     suspend fun approveJoinRequest(teamId: String, targetUid: String) {
         val ownerUid = uidOrThrow()
         val teamRef = db.collection("teams").document(teamId)
 
-        // find any pending request for (teamId, targetUid)
+        // find pending request for (teamId, targetUid)
         val reqSnap = db.collection("teamJoinRequests")
             .whereEqualTo("teamId", teamId)
             .whereEqualTo("uid", targetUid)
@@ -338,12 +336,13 @@ class TeamsRepository(
                 tx.update(teamRef, "memberUids", members + targetUid)
             }
 
-            tx.delete(reqDocRef)
+            // mark as approved instead of deleting
+            tx.update(reqDocRef, "status", "approved")
         }.await()
     }
 
     /**
-     * Owner: deny a request → just delete the joinRequest doc.
+     * Owner: deny a request → mark as denied (no membership change).
      */
     suspend fun denyJoinRequest(teamId: String, targetUid: String) {
         val ownerUid = uidOrThrow()
@@ -357,8 +356,7 @@ class TeamsRepository(
             .get()
             .await()
 
-        val reqDocRef = reqSnap.documents.firstOrNull()?.reference
-            ?: return
+        val reqDocRef = reqSnap.documents.firstOrNull()?.reference ?: return
 
         db.runTransaction { tx ->
             val team = tx.get(teamRef)
@@ -367,13 +365,12 @@ class TeamsRepository(
             val owner = team.getString("ownerUid") ?: ""
             if (owner != ownerUid) throw IllegalAccessException("Not squad owner")
 
-            tx.delete(reqDocRef)
+            tx.update(reqDocRef, "status", "denied")
         }.await()
     }
 
     /**
      * Edit an existing squad (owner-only).
-     * Updates name, skill, play days, and privacy.
      */
     suspend fun updateTeam(
         teamId: String,
@@ -392,14 +389,12 @@ class TeamsRepository(
             val ownerUid = snap.getString("ownerUid") ?: ""
             if (ownerUid != uid) throw IllegalAccessException("Not team owner")
 
-            // Build updates map
             val updates = mutableMapOf<String, Any>(
                 "name" to name,
                 "playDays" to playDays,
                 "inviteOnly" to inviteOnly
             )
 
-            // If preferredSkillLevel is null, clear the field; otherwise set it
             if (preferredSkillLevel != null) {
                 updates["preferredSkillLevel"] = preferredSkillLevel
             } else {
@@ -421,9 +416,6 @@ class TeamsRepository(
         val inviteOnly: Boolean
     )
 
-    /**
-     * Live invites for the current user (as player).
-     */
     fun getInvitesForCurrentUser(): Flow<List<TeamInviteForUser>> = callbackFlow {
         val uid = uidOrThrow()
         val reg = db.collection("teamInvites")
@@ -462,14 +454,9 @@ class TeamsRepository(
         awaitClose { reg.remove() }
     }
 
-    /**
-     * Owner: send an invite to a player by username.
-     * (We assume user docs are stored under /users/{uid} with a `username` field.)
-     */
     suspend fun sendTeamInviteByUsername(teamId: String, username: String) {
         val ownerUid = uidOrThrow()
 
-        // Make sure the squad exists and I'm the owner
         val teamRef = db.collection("teams").document(teamId)
         val teamSnap = teamRef.get().await()
         if (!teamSnap.exists()) throw IllegalStateException("Squad not found")
@@ -477,7 +464,6 @@ class TeamsRepository(
         val owner = teamSnap.getString("ownerUid") ?: ""
         if (owner != ownerUid) throw IllegalAccessException("Not squad owner")
 
-        // Look up the player by username
         val userSnap = db.collection("users")
             .whereEqualTo("username", username)
             .limit(1)
@@ -489,13 +475,11 @@ class TeamsRepository(
 
         val targetUid = userDoc.id
 
-        // Don't invite if already in squad
         val members = teamSnap.get("memberUids") as? List<String> ?: emptyList()
         if (members.contains(targetUid)) {
             throw IllegalStateException("That player is already in this squad")
         }
 
-        // Don't double-invite
         val existing = db.collection("teamInvites")
             .whereEqualTo("teamId", teamId)
             .whereEqualTo("uid", targetUid)
@@ -508,7 +492,6 @@ class TeamsRepository(
             throw IllegalStateException("You’ve already invited this player")
         }
 
-        // Copy some display info from the squad so the invite tab can show it
         val teamName = teamSnap.getString("name") ?: "Unnamed squad"
         val preferredSkill = teamSnap.getString("preferredSkillLevel")
         val playDays = teamSnap.get("playDays") as? List<String> ?: emptyList()
@@ -529,9 +512,6 @@ class TeamsRepository(
         inviteRef.set(data).await()
     }
 
-    /**
-     * Player: accept an invite (adds me to memberUids).
-     */
     suspend fun acceptInvite(inviteId: String) {
         val uid = uidOrThrow()
         val inviteRef = db.collection("teamInvites").document(inviteId)
@@ -562,9 +542,6 @@ class TeamsRepository(
         }.await()
     }
 
-    /**
-     * Player: decline an invite.
-     */
     suspend fun declineInvite(inviteId: String) {
         val uid = uidOrThrow()
         val inviteRef = db.collection("teamInvites").document(inviteId)
@@ -579,6 +556,4 @@ class TeamsRepository(
             tx.update(inviteRef, "status", "declined")
         }.await()
     }
-
-
 }

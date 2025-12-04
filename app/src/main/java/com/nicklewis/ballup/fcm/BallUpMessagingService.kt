@@ -1,3 +1,4 @@
+// BallUpMessagingService.kt
 package com.nicklewis.ballup.fcm
 
 import android.app.NotificationChannel
@@ -103,7 +104,7 @@ class BallUpMessagingService : FirebaseMessagingService() {
         val runId = data["runId"] ?: ""
         val slotsLeft = data["slotsLeft"] ?: ""
 
-        // --- NEW: squad invite ---
+        // --- Squad: invite to player ---
         if (type == "team_invite") {
             val teamId   = data["teamId"].orEmpty()
             val teamName = data["teamName"].orEmpty()
@@ -122,7 +123,6 @@ class BallUpMessagingService : FirebaseMessagingService() {
                 "You’ve been invited to join this squad."
             }
 
-            // In-app banner
             NotifBus.emit(
                 InAppAlert.TeamInvite(
                     title = title,
@@ -132,7 +132,6 @@ class BallUpMessagingService : FirebaseMessagingService() {
                 )
             )
 
-            // System notification
             val ctx = applicationContext
             CoroutineScope(Dispatchers.IO).launch {
                 val allowWhileForeground = try {
@@ -142,7 +141,6 @@ class BallUpMessagingService : FirebaseMessagingService() {
 
                 val inForeground = applicationIsInForeground()
                 if (!inForeground || allowWhileForeground) {
-                    // Deep-link → Teams screen, invites tab
                     val intent = Intent(ctx, MainActivity::class.java).apply {
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                         putExtra("deeplink_tab", "teams_invites")
@@ -172,6 +170,221 @@ class BallUpMessagingService : FirebaseMessagingService() {
                     if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return@launch
 
                     NotificationManagerCompat.from(ctx).notify(2001, notif)
+                }
+            }
+            return
+        }
+
+        // --- Squad: invite accepted (notify owner) ---
+        if (type == "team_invite_accepted") {
+            val teamId      = data["teamId"].orEmpty()
+            val teamName    = data["teamName"].orEmpty()
+            val playerName  = data["playerName"].orEmpty()
+
+            val title = when {
+                teamName.isNotEmpty() && playerName.isNotEmpty() ->
+                    "$playerName joined $teamName"
+                teamName.isNotEmpty() ->
+                    "Invite accepted for $teamName"
+                else ->
+                    "Squad invite accepted"
+            }
+
+            val body = if (playerName.isNotEmpty()) {
+                "$playerName accepted your squad invite."
+            } else {
+                "Your squad invite was accepted."
+            }
+
+            NotifBus.emit(
+                InAppAlert.TeamInviteAccepted(
+                    title = title,
+                    message = body,
+                    teamId = teamId
+                )
+            )
+
+            val ctx = applicationContext
+            CoroutineScope(Dispatchers.IO).launch {
+                val allowWhileForeground = try {
+                    com.nicklewis.ballup.data.LocalPrefsStore(ctx)
+                        .prefsFlow.first().notifyWhileForeground
+                } catch (_: Throwable) { false }
+
+                val inForeground = applicationIsInForeground()
+                if (!inForeground || allowWhileForeground) {
+                    val intent = Intent(ctx, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        putExtra("deeplink_tab", "teams_squads")
+                        putExtra("deeplink_teamId", teamId)
+                    }
+                    val pi = PendingIntent.getActivity(
+                        ctx, 2002, intent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+
+                    val channelId = "teams"
+                    ensureChannel(channelId, "Squad Alerts")
+
+                    val notif = NotificationCompat.Builder(ctx, channelId)
+                        .setSmallIcon(notificationIcon())
+                        .setContentTitle(title)
+                        .setContentText(body)
+                        .setContentIntent(pi)
+                        .setAutoCancel(true)
+                        .build()
+
+                    if (Build.VERSION.SDK_INT >= 33 &&
+                        ContextCompat.checkSelfPermission(
+                            ctx,
+                            Manifest.permission.POST_NOTIFICATIONS
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) return@launch
+                    if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return@launch
+
+                    NotificationManagerCompat.from(ctx).notify(2002, notif)
+                }
+            }
+            return
+        }
+
+        // --- Squad: join request created (notify owner) ---
+        if (type == "team_join_requested") {
+            val teamId        = data["teamId"].orEmpty()
+            val teamName      = data["teamName"].orEmpty()
+            val requesterName = data["requesterName"].orEmpty()
+
+            val title = if (teamName.isNotEmpty()) {
+                "Join request for $teamName"
+            } else {
+                "New squad join request"
+            }
+
+            val body = if (requesterName.isNotEmpty()) {
+                "$requesterName wants to join your squad."
+            } else {
+                "Someone requested to join your squad."
+            }
+
+            NotifBus.emit(
+                InAppAlert.TeamJoinRequest(
+                    title = title,
+                    teamName = teamName,
+                    requesterName = requesterName,
+                    teamId = teamId
+                )
+            )
+
+            val ctx = applicationContext
+            CoroutineScope(Dispatchers.IO).launch {
+                val allowWhileForeground = try {
+                    com.nicklewis.ballup.data.LocalPrefsStore(ctx)
+                        .prefsFlow.first().notifyWhileForeground
+                } catch (_: Throwable) { false }
+
+                val inForeground = applicationIsInForeground()
+                if (!inForeground || allowWhileForeground) {
+                    val intent = Intent(ctx, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        putExtra("deeplink_tab", "teams_requests")
+                        putExtra("deeplink_teamId", teamId)
+                    }
+                    val pi = PendingIntent.getActivity(
+                        ctx, 2003, intent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+
+                    val channelId = "teams"
+                    ensureChannel(channelId, "Squad Alerts")
+
+                    val notif = NotificationCompat.Builder(ctx, channelId)
+                        .setSmallIcon(notificationIcon())
+                        .setContentTitle(title)
+                        .setContentText(body)
+                        .setContentIntent(pi)
+                        .setAutoCancel(true)
+                        .build()
+
+                    if (Build.VERSION.SDK_INT >= 33 &&
+                        ContextCompat.checkSelfPermission(
+                            ctx,
+                            Manifest.permission.POST_NOTIFICATIONS
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) return@launch
+                    if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return@launch
+
+                    NotificationManagerCompat.from(ctx).notify(2003, notif)
+                }
+            }
+            return
+        }
+
+        // 🔹 NEW: Squad join approved (notify requester)
+        if (type == "team_join_approved") {
+            val teamId   = data["teamId"].orEmpty()
+            val teamName = data["teamName"].orEmpty()
+
+            val title = if (teamName.isNotEmpty()) {
+                "You're in: $teamName"
+            } else {
+                "Squad request approved"
+            }
+
+            val body = if (teamName.isNotEmpty()) {
+                "You were added to $teamName."
+            } else {
+                "Your squad join request was approved."
+            }
+
+            // In-app banner
+            NotifBus.emit(
+                InAppAlert.TeamJoinApproved(
+                    title = title,
+                    message = body,
+                    teamId = teamId
+                )
+            )
+
+            // System notification
+            val ctx = applicationContext
+            CoroutineScope(Dispatchers.IO).launch {
+                val allowWhileForeground = try {
+                    com.nicklewis.ballup.data.LocalPrefsStore(ctx)
+                        .prefsFlow.first().notifyWhileForeground
+                } catch (_: Throwable) { false }
+
+                val inForeground = applicationIsInForeground()
+                if (!inForeground || allowWhileForeground) {
+                    val intent = Intent(ctx, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        putExtra("deeplink_tab", "teams_squads")
+                        putExtra("deeplink_teamId", teamId)
+                    }
+                    val pi = PendingIntent.getActivity(
+                        ctx, 2005, intent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+
+                    val channelId = "teams"
+                    ensureChannel(channelId, "Squad Alerts")
+
+                    val notif = NotificationCompat.Builder(ctx, channelId)
+                        .setSmallIcon(notificationIcon())
+                        .setContentTitle(title)
+                        .setContentText(body)
+                        .setContentIntent(pi)
+                        .setAutoCancel(true)
+                        .build()
+
+                    if (Build.VERSION.SDK_INT >= 33 &&
+                        ContextCompat.checkSelfPermission(
+                            ctx,
+                            Manifest.permission.POST_NOTIFICATIONS
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) return@launch
+                    if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return@launch
+
+                    NotificationManagerCompat.from(ctx).notify(2005, notif)
                 }
             }
             return
@@ -357,6 +570,69 @@ class BallUpMessagingService : FirebaseMessagingService() {
             (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
             fallback
         )
+
+        // --- Squad: deleted (notify members) ---
+        if (type == "team_deleted") {
+            val teamId   = data["teamId"].orEmpty()
+            val teamName = data["teamName"].orEmpty()
+
+            val title = if (teamName.isNotEmpty()) {
+                "Squad deleted: $teamName"
+            } else {
+                "A squad you were in was deleted"
+            }
+
+            val body = "This squad was deleted by its owner."
+
+            NotifBus.emit(
+                InAppAlert.TeamDeleted(
+                    title = title,
+                    message = body
+                )
+            )
+
+            val ctx = applicationContext
+            CoroutineScope(Dispatchers.IO).launch {
+                val allowWhileForeground = try {
+                    com.nicklewis.ballup.data.LocalPrefsStore(ctx)
+                        .prefsFlow.first().notifyWhileForeground
+                } catch (_: Throwable) { false }
+
+                val inForeground = applicationIsInForeground()
+                if (!inForeground || allowWhileForeground) {
+                    val intent = Intent(ctx, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        putExtra("deeplink_tab", "teams_squads")
+                    }
+                    val pi = PendingIntent.getActivity(
+                        ctx, 2004, intent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+
+                    val channelIdTeams = "teams"
+                    ensureChannel(channelIdTeams, "Squad Alerts")
+
+                    val notif = NotificationCompat.Builder(ctx, channelIdTeams)
+                        .setSmallIcon(notificationIcon())
+                        .setContentTitle(title)
+                        .setContentText(body)
+                        .setContentIntent(pi)
+                        .setAutoCancel(true)
+                        .build()
+
+                    if (Build.VERSION.SDK_INT >= 33 &&
+                        ContextCompat.checkSelfPermission(
+                            ctx,
+                            Manifest.permission.POST_NOTIFICATIONS
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) return@launch
+                    if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return@launch
+
+                    NotificationManagerCompat.from(ctx).notify(2004, notif)
+                }
+            }
+            return
+        }
     }
 
     private fun ensureChannel(id: String, name: String) {

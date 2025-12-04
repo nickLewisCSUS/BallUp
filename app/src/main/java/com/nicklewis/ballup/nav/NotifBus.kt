@@ -43,4 +43,28 @@ sealed class InAppAlert {
         val teamId: String,
         val inviteId: String
     ) : InAppAlert()
+
+    data class TeamInviteAccepted(
+        val title: String,
+        val message: String,
+        val teamId: String
+    ) : InAppAlert()
+
+    data class TeamJoinRequest(
+        val title: String,
+        val teamName: String,
+        val requesterName: String,
+        val teamId: String
+    ) : InAppAlert()
+
+    data class TeamJoinApproved(
+        val title: String,
+        val message: String,
+        val teamId: String
+    ) : InAppAlert()
+
+    data class TeamDeleted(
+        val title: String,
+        val message: String
+    ) : InAppAlert()
 }

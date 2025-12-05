@@ -14,6 +14,10 @@ admin.initializeApp();
 setGlobalOptions({ region: "us-central1", maxInstances: 1 });
 
 export { cleanupStaleRuns, purgeOldFinishedRuns } from "./cleanupRuns";
+export {
+  notifyRunInviteCreated,
+  createRunInvitesForNewRun,
+} from "./runInvites";
 
 const db = admin.firestore();
 const messaging = admin.messaging();

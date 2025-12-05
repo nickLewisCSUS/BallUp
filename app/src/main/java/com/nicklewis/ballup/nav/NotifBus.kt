@@ -67,4 +67,10 @@ sealed class InAppAlert {
         val title: String,
         val message: String
     ) : InAppAlert()
+
+    data class RunInvite(
+        val title: String,
+        val courtName: String,
+        val runId: String
+    ) : InAppAlert()
 }

@@ -104,34 +104,32 @@ class BallUpMessagingService : FirebaseMessagingService() {
         val runId = data["runId"] ?: ""
         val slotsLeft = data["slotsLeft"] ?: ""
 
-        // --- Squad: invite to player ---
-        if (type == "team_invite") {
-            val teamId   = data["teamId"].orEmpty()
-            val teamName = data["teamName"].orEmpty()
-            val inviteId = data["inviteId"].orEmpty()
-            val ownerName = data["ownerName"].orEmpty()
+        // 🔹 NEW: direct run invite
+        if (type == "run_invite" && runId.isNotEmpty()) {
+            val runName = data["runName"].orEmpty()
 
-            val title = if (teamName.isNotEmpty()) {
-                "Squad invite: $teamName"
+            val title = if (runName.isNotEmpty()) {
+                "Run invite: $runName"
             } else {
-                "New squad invite"
+                "You were invited to a run"
             }
 
-            val body = if (ownerName.isNotEmpty()) {
-                "$ownerName invited you to join this squad."
+            val body = if (courtName.isNotEmpty()) {
+                "You were invited to a run at $courtName."
             } else {
-                "You’ve been invited to join this squad."
+                "Tap to review your invite."
             }
 
+            // In-app banner
             NotifBus.emit(
-                InAppAlert.TeamInvite(
+                InAppAlert.RunInvite(
                     title = title,
-                    teamName = teamName,
-                    teamId = teamId,
-                    inviteId = inviteId
+                    courtName = courtName,
+                    runId = runId
                 )
             )
 
+            // System notification
             val ctx = applicationContext
             CoroutineScope(Dispatchers.IO).launch {
                 val allowWhileForeground = try {
@@ -143,15 +141,17 @@ class BallUpMessagingService : FirebaseMessagingService() {
                 if (!inForeground || allowWhileForeground) {
                     val intent = Intent(ctx, MainActivity::class.java).apply {
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                        putExtra("deeplink_tab", "teams_invites")
+                        putExtra("deeplink_tab", "courts")
+                        // optional: extra to hint that we should open invites
+                        putExtra("deeplink_hasRunInvite", true)
                     }
                     val pi = PendingIntent.getActivity(
-                        ctx, 2001, intent,
+                        ctx, 3001, intent,
                         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                     )
 
-                    val channelId = "teams"
-                    ensureChannel(channelId, "Squad Alerts")
+                    val channelId = "runs"
+                    ensureChannel(channelId, "Run Alerts")
 
                     val notif = NotificationCompat.Builder(ctx, channelId)
                         .setSmallIcon(notificationIcon())
@@ -169,12 +169,11 @@ class BallUpMessagingService : FirebaseMessagingService() {
                     ) return@launch
                     if (!NotificationManagerCompat.from(ctx).areNotificationsEnabled()) return@launch
 
-                    NotificationManagerCompat.from(ctx).notify(2001, notif)
+                    NotificationManagerCompat.from(ctx).notify(3001, notif)
                 }
             }
             return
         }
-
         // --- Squad: invite accepted (notify owner) ---
         if (type == "team_invite_accepted") {
             val teamId      = data["teamId"].orEmpty()

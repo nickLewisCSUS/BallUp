@@ -173,6 +173,21 @@ fun InAppAlertsOverlay(nav: NavHostController) {
                         }
                     }
                 }
+
+                is InAppAlert.RunInvite -> {
+                    val res = snack.showSnackbar(
+                        message = "${evt.title} · ${evt.courtName}",
+                        actionLabel = "View",
+                        withDismissAction = true,
+                        duration = SnackbarDuration.Short
+                    )
+                    if (res == SnackbarResult.ActionPerformed) {
+                        nav.navigate("run/${evt.runId}") {
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                }
             }
         }
     }

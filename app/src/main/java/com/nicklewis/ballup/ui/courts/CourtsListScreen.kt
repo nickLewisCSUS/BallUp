@@ -7,15 +7,23 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -50,6 +58,15 @@ import com.nicklewis.ballup.util.hasLocationPermission
 import com.nicklewis.ballup.vm.PrefsViewModel
 import com.nicklewis.ballup.vm.StarsViewModel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import androidx.compose.foundation.layout.height
+
+private data class RunInviteUi(
+    val id: String,
+    val runId: String,
+    val runName: String,
+    val courtName: String
+)
 
 @Composable
 fun CourtsListScreen(
@@ -96,6 +113,40 @@ fun CourtsListScreen(
     val uid = FirebaseAuth.getInstance().currentUser?.uid
     val scope = rememberCoroutineScope()
     val db = remember { FirebaseFirestore.getInstance() }
+
+    // 🔔 Active run invite (simple inbox: latest pending invite)
+    var activeRunInvite by remember { mutableStateOf<RunInviteUi?>(null) }
+
+    LaunchedEffect(uid) {
+        if (uid == null) {
+            activeRunInvite = null
+            return@LaunchedEffect
+        }
+        try {
+            val snap = db.collection("runInvites")
+                .whereEqualTo("inviteeUid", uid)
+                .whereEqualTo("status", "pending")
+                .orderBy(
+                    "createdAt",
+                    com.google.firebase.firestore.Query.Direction.DESCENDING
+                )
+                .limit(1)
+                .get()
+                .await()
+
+            val doc = snap.documents.firstOrNull()
+            activeRunInvite = doc?.let { d ->
+                RunInviteUi(
+                    id = d.id,
+                    runId = d.getString("runId") ?: "",
+                    runName = d.getString("runName") ?: "Pickup run",
+                    courtName = d.getString("courtName") ?: ""
+                )
+            }
+        } catch (e: Exception) {
+            Log.w("CourtsList", "Failed to load run invites", e)
+        }
+    }
 
     // runId -> has pending request from this user
     val pendingRequests = remember { mutableStateMapOf<String, Boolean>() }
@@ -156,6 +207,59 @@ fun CourtsListScreen(
                 showStarredOnly = showStarredOnly,
                 onToggleStarredOnly = { showStarredOnly = !showStarredOnly }
             )
+
+            // 🔔 If there is an active run invite, show it at the top
+            activeRunInvite?.let { invite ->
+                RunInviteCard(
+                    invite = invite,
+                    onAccept = {
+                        if (uid == null) return@RunInviteCard
+                        scope.launch {
+                            try {
+                                // auto-join run
+                                joinRun(db, invite.runId, uid)
+                                // mark invite accepted
+                                db.collection("runInvites")
+                                    .document(invite.id)
+                                    .update("status", "accepted")
+                                activeRunInvite = null
+                                snackbarHostState.showSnackbar(
+                                    message = "Joined run from invite.",
+                                    withDismissAction = true
+                                )
+                            } catch (e: Exception) {
+                                Log.e("Runs", "join from invite failed", e)
+                                snackbarHostState.showSnackbar(
+                                    message = "Couldn't join from invite. Please try again.",
+                                    withDismissAction = true
+                                )
+                            }
+                        }
+                    },
+                    onDecline = {
+                        if (uid == null) return@RunInviteCard
+                        scope.launch {
+                            try {
+                                db.collection("runInvites")
+                                    .document(invite.id)
+                                    .update("status", "declined")
+                                activeRunInvite = null
+                                snackbarHostState.showSnackbar(
+                                    message = "Invite declined.",
+                                    withDismissAction = true
+                                )
+                            } catch (e: Exception) {
+                                Log.e("Runs", "decline invite failed", e)
+                                snackbarHostState.showSnackbar(
+                                    message = "Couldn't decline invite. Please try again.",
+                                    withDismissAction = true
+                                )
+                            }
+                        }
+                    }
+                )
+                Spacer(Modifier.height(8.dp))
+            }
 
             vm.error?.let {
                 Text(
@@ -348,5 +452,49 @@ private fun humanizeCreateRunError(t: Throwable): String {
                 msg.contains("index", ignoreCase = true) ->
             "Run search needs to finish setting up. Try again in a moment."
         else -> "Couldn't start the run. Please adjust the time or try again."
+    }
+}
+
+@Composable
+private fun RunInviteCard(
+    invite: RunInviteUi,
+    onAccept: () -> Unit,
+    onDecline: () -> Unit
+) {
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.elevatedCardColors()
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Text(
+                text = "You were invited to a run",
+                style = MaterialTheme.typography.titleSmall
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = invite.runName,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            if (invite.courtName.isNotBlank()) {
+                Text(
+                    text = "at ${invite.courtName}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(onClick = onDecline) {
+                    Text("Decline")
+                }
+                Spacer(Modifier.width(8.dp))
+                FilledTonalButton(onClick = onAccept) {
+                    Text("Accept")
+                }
+            }
+        }
     }
 }

@@ -57,14 +57,15 @@ fun RunRow(
     // Host is allowed to leave only if more than 1 player exists
     val hostCanLeave = isHost && rr.playerCount > 1
 
-    // For invite-only runs, check if the user is on the allow list
-    val isAllowedForInviteOnly =
+    // Allow-list check (used for INVITE_ONLY and HOST_APPROVAL)
+    val isAllowedByAllowList =
         currentUid != null && rr.allowedUids.contains(currentUid)
 
     // Status pill text
     val status = when {
         runAccess == RunAccess.INVITE_ONLY && openSlots > 0 -> "Invite only"
-        runAccess == RunAccess.HOST_APPROVAL && openSlots > 0 -> "Needs approval"
+        runAccess == RunAccess.HOST_APPROVAL && openSlots > 0 && !isAllowedByAllowList -> "Needs approval"
+        runAccess == RunAccess.HOST_APPROVAL && openSlots > 0 && isAllowedByAllowList -> "Invited"
         openSlots > 0 -> "Open"
         rr.playerCount >= rr.maxPlayers -> "Full"
         else -> "Active"
@@ -135,7 +136,22 @@ fun RunRow(
                             }
 
                             RunAccess.HOST_APPROVAL -> {
-                                if (!hasPendingRequest) {
+                                if (isAllowedByAllowList) {
+                                    // ✅ Invited players auto-skip request flow
+                                    FilledTonalButton(
+                                        onClick = onJoin,
+                                        shape = MaterialTheme.shapes.medium,
+                                        contentPadding = PaddingValues(
+                                            horizontal = 14.dp,
+                                            vertical = 6.dp
+                                        )
+                                    ) {
+                                        Text(
+                                            "Join",
+                                            style = MaterialTheme.typography.labelLarge
+                                        )
+                                    }
+                                } else if (!hasPendingRequest) {
                                     // Normal state: user can request
                                     FilledTonalButton(
                                         onClick = onRequestJoin,
@@ -178,7 +194,7 @@ fun RunRow(
                             }
 
                             RunAccess.INVITE_ONLY -> {
-                                if (isAllowedForInviteOnly) {
+                                if (isAllowedByAllowList) {
                                     FilledTonalButton(
                                         onClick = onJoin,
                                         shape = MaterialTheme.shapes.medium,
@@ -298,4 +314,3 @@ private fun StatusPill(text: String, filled: Boolean) {
         )
     }
 }
-

@@ -16,6 +16,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.google.firebase.Timestamp
 import com.nicklewis.ballup.model.Run
 import com.nicklewis.ballup.model.RunAccess
+import com.nicklewis.ballup.model.Team
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -30,7 +31,8 @@ fun StartRunDialog(
     courtId: String,
     onDismiss: () -> Unit,
     onCreate: (Run) -> Unit,
-    errorMessage: String? = null,   // inline error text from screen
+    errorMessage: String? = null,
+    teams: List<Team> = emptyList()
 ) {
     if (!visible) return
 
@@ -98,6 +100,9 @@ fun StartRunDialog(
         RunAccess.INVITE_ONLY to "Invite only"
     )
 
+    // --- Squad selection state ---
+    var selectedTeamIds by remember { mutableStateOf(setOf<String>()) }
+
     val capValid = capInt() in 2..50
     val timeValid =
         startAt.isAfter(minStart) &&
@@ -115,6 +120,17 @@ fun StartRunDialog(
                 enabled = formValid && !submitting,
                 onClick = {
                     val zone = ZoneId.systemDefault()
+
+                    // Gather all invited UIDs from selected squads (owner + members)
+                    val invitedFromSquads: List<String> =
+                        teams
+                            .filter { selectedTeamIds.contains(it.id) }
+                            .flatMap { team ->
+                                listOf(team.ownerUid) + team.memberUids
+                            }
+                            .filter { it.isNotBlank() }
+                            .distinct()
+
                     val run = Run(
                         courtId    = courtId,
                         status     = "active",
@@ -127,9 +143,8 @@ fun StartRunDialog(
                         playerIds  = emptyList(),
                         name       = normalizeRunName(nameText),
 
-                        // NEW
                         access = access.name,
-                        allowedUids = emptyList(),
+                        allowedUids = invitedFromSquads,
                         pendingJoinsCount = 0
                     )
                     submitting = true
@@ -243,6 +258,44 @@ fun StartRunDialog(
                                 text = label,
                                 style = MaterialTheme.typography.bodyMedium
                             )
+                        }
+                    }
+                }
+
+                // --- Invite your squad (if any teams available) ---
+                if (teams.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "Invite your squad",
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Text(
+                        text = "Members of selected squads will automatically be allowed into this run.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(Modifier.height(4.dp))
+
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        teams.forEach { team ->
+                            val checked = selectedTeamIds.contains(team.id)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Checkbox(
+                                    checked = checked,
+                                    onCheckedChange = { isChecked ->
+                                        selectedTeamIds =
+                                            if (isChecked) selectedTeamIds + team.id
+                                            else selectedTeamIds - team.id
+                                    }
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = team.name.ifBlank { "Unnamed squad" },
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
                         }
                     }
                 }

@@ -11,9 +11,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -21,16 +33,18 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.android.gms.location.LocationServices
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.nicklewis.ballup.data.cancelJoinRequest
 import com.nicklewis.ballup.data.joinRun
 import com.nicklewis.ballup.data.leaveRun
 import com.nicklewis.ballup.data.requestJoinRun
-import com.nicklewis.ballup.data.cancelJoinRequest     // NEW
+import com.nicklewis.ballup.model.Team
 import com.nicklewis.ballup.nav.AppNavControllerHolder
 import com.nicklewis.ballup.ui.courts.components.CourtCard
 import com.nicklewis.ballup.ui.courts.components.FilterBar
 import com.nicklewis.ballup.ui.courts.components.SearchBarWithSuggestions
 import com.nicklewis.ballup.ui.runs.RunsViewModel
 import com.nicklewis.ballup.ui.runs.StartRunDialog
+import com.nicklewis.ballup.ui.teams.TeamsViewModel
 import com.nicklewis.ballup.util.fetchLastKnownLocation
 import com.nicklewis.ballup.util.hasLocationPermission
 import com.nicklewis.ballup.vm.PrefsViewModel
@@ -43,6 +57,7 @@ fun CourtsListScreen(
 ) {
     val starsVm: StarsViewModel = viewModel()
     val runsViewModel: RunsViewModel = viewModel()
+    val teamsViewModel: TeamsViewModel = viewModel()          // 👈 squads VM
 
     val ctx = LocalContext.current
     val prefsVm: PrefsViewModel =
@@ -82,8 +97,12 @@ fun CourtsListScreen(
     val scope = rememberCoroutineScope()
     val db = remember { FirebaseFirestore.getInstance() }
 
-    // NEW: runId -> has pending request from this user
+    // runId -> has pending request from this user
     val pendingRequests = remember { mutableStateMapOf<String, Boolean>() }
+
+    // 🔥 real squads from TeamsViewModel
+    val teamsUiState by teamsViewModel.uiState.collectAsState()
+    val myTeams: List<Team> = teamsUiState.teams
 
     val visibleRows = remember(vm.rows, showStarredOnly, starredIds) {
         if (!showStarredOnly) {
@@ -190,7 +209,7 @@ fun CourtsListScreen(
                                 scope.launch {
                                     try {
                                         requestJoinRun(db, runId, uid)
-                                        pendingRequests[runId] = true       // mark as requested
+                                        pendingRequests[runId] = true
                                         snackbarHostState.showSnackbar(
                                             message = "Request sent to host.",
                                             withDismissAction = true
@@ -198,7 +217,6 @@ fun CourtsListScreen(
                                     } catch (e: Exception) {
                                         Log.e("Runs", "requestJoinRun failed", e)
 
-                                        // If backend says we already requested, mirror that in UI
                                         if (e.message?.contains("already requested", ignoreCase = true) == true) {
                                             pendingRequests[runId] = true
                                             snackbarHostState.showSnackbar(
@@ -242,7 +260,7 @@ fun CourtsListScreen(
                                     }
                                 }
                             },
-                            onCancelRequestRun = { runId ->         // NEW
+                            onCancelRequestRun = { runId ->
                                 if (uid == null) {
                                     Log.e("Runs", "cancelJoinRequest: not signed in")
                                     return@CourtCard
@@ -264,7 +282,7 @@ fun CourtsListScreen(
                                     }
                                 }
                             },
-                            hasPendingRequestForRun = { runId ->    // NEW
+                            hasPendingRequestForRun = { runId ->
                                 pendingRequests[runId] == true
                             },
                             onViewRun = { runId ->
@@ -301,7 +319,8 @@ fun CourtsListScreen(
                             }
                         )
                     },
-                    errorMessage = dialogError
+                    errorMessage = dialogError,
+                    teams = myTeams          // ✅ real squads fed into dialog
                 )
             }
         }
@@ -328,7 +347,6 @@ private fun humanizeCreateRunError(t: Throwable): String {
         msg.contains("FAILED_PRECONDITION", ignoreCase = true) &&
                 msg.contains("index", ignoreCase = true) ->
             "Run search needs to finish setting up. Try again in a moment."
-
         else -> "Couldn't start the run. Please adjust the time or try again."
     }
 }

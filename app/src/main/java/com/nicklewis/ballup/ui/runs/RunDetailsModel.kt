@@ -34,16 +34,18 @@ data class RunDoc(
             val playerCount = (data["playerCount"] as? Number)?.toInt() ?: 0
             val hostUid = data["hostUid"] as? String
             val hostId = data["hostId"] as? String
+
             @Suppress("UNCHECKED_CAST")
-            val playerIds =
-                (data["playerIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+            val playerIds = (data["playerIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+
             val name = data["name"] as? String
             val startsAt = data["startsAt"] as? Timestamp
             val endsAt = data["endsAt"] as? Timestamp
             val access = data["access"] as? String ?: com.nicklewis.ballup.model.RunAccess.OPEN.name
+
             @Suppress("UNCHECKED_CAST")
-            val allowedUids =
-                (data["allowedUids"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+            val allowedUids = (data["allowedUids"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+
             val pending = (data["pendingJoinsCount"] as? Number)?.toInt() ?: 0
 
             return RunDoc(
@@ -107,9 +109,9 @@ suspend fun lookupUserProfile(
             val playStyle = doc.getString("playStyle")
             val heightBracket = doc.getString("heightBracket")
             val displayName = doc.getString("displayName")
+
             @Suppress("UNCHECKED_CAST")
-            val fav = (doc.get("favoriteCourts") as? List<*>)?.mapNotNull { it as? String }
-                ?: emptyList()
+            val fav = (doc.get("favoriteCourts") as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
 
             PlayerProfile(
                 username = username,
@@ -126,18 +128,19 @@ suspend fun lookupUserProfile(
     }
 }
 
-fun formatWindow(
-    start: Timestamp?,
-    end: Timestamp?
-): String {
+fun formatWindow(start: Timestamp?, end: Timestamp?): String {
     if (start == null || end == null) return "Time: not set"
+
     val zone = ZoneId.systemDefault()
     val s = start.toDate().toInstant().atZone(zone).toLocalDateTime()
     val e = end.toDate().toInstant().atZone(zone).toLocalDateTime()
+
     val dFmt = DateTimeFormatter.ofPattern("EEE, MMM d")
     val tFmt = DateTimeFormatter.ofPattern("h:mm a")
-    return if (s.toLocalDate() == e.toLocalDate())
+
+    return if (s.toLocalDate() == e.toLocalDate()) {
         "${dFmt.format(s)} • ${tFmt.format(s)} – ${tFmt.format(e)}"
-    else
-        "${dFmt.format(s)} ${tFmt.format(s)} → ${dFmt.format(e)} ${dFmt.format(e)}"
+    } else {
+        "${dFmt.format(s)} ${tFmt.format(s)} → ${dFmt.format(e)} ${tFmt.format(e)}"
+    }
 }

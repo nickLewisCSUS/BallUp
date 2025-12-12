@@ -32,7 +32,6 @@ class CourtsListViewModel : ViewModel() {
     var userLoc by mutableStateOf<LatLng?>(null)
 
     init {
-        // courts
         db.collection("courts")
             .orderBy("name", Query.Direction.ASCENDING)
             .addSnapshotListener { snap, e ->
@@ -41,9 +40,10 @@ class CourtsListViewModel : ViewModel() {
                     ?.map { it.id to (it.toObject<Court>() ?: Court()) }
                     .orEmpty()
             }
-        // runs
+
+        // ✅ show ACTIVE + SCHEDULED runs in the court cards
         db.collection("runs")
-            .whereEqualTo("status", "active")
+            .whereIn("status", listOf("active", "scheduled"))
             .addSnapshotListener { snap, e ->
                 if (e != null) { error = e.message; return@addSnapshotListener }
                 runs = snap?.documents
@@ -52,7 +52,6 @@ class CourtsListViewModel : ViewModel() {
             }
     }
 
-    // Derived
     val filtered: List<Pair<String, Court>>
         get() = courts.filter { (_, c) ->
             when (c.type?.trim()?.lowercase()) {

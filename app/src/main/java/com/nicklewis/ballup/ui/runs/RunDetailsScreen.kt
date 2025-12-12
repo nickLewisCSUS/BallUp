@@ -38,11 +38,9 @@ fun RunDetailsScreen(
     val uid = remember { FirebaseAuth.getInstance().currentUser?.uid }
     val scope = rememberCoroutineScope()
 
-    // 🔹 Squads state from ViewModel
     val uiState by viewModel.uiState.collectAsState()
     val ownedTeams = uiState.ownedTeams
     val squadError = uiState.errorMessage
-
     var showSquadSheet by remember { mutableStateOf(false) }
 
     var loading by remember { mutableStateOf(true) }
@@ -57,21 +55,15 @@ fun RunDetailsScreen(
     var isHost by remember { mutableStateOf(false) }
     var showEdit by remember { mutableStateOf(false) }
 
-    // Host + players profile info
     var hostProfile by remember { mutableStateOf<PlayerProfile?>(null) }
     var playerProfiles by remember { mutableStateOf<Map<String, PlayerProfile>>(emptyMap()) }
 
-    // ----- pending join requests -----
     var pendingRequests by remember { mutableStateOf<List<JoinRequestDoc>>(emptyList()) }
     var pendingProfiles by remember { mutableStateOf<Map<String, PlayerProfile>>(emptyMap()) }
 
-    // invited players (for INVITE_ONLY)
     var invitedProfiles by remember { mutableStateOf<Map<String, PlayerProfile>>(emptyMap()) }
-
-    // invite dialog visibility (single-player invite)
     var showInviteDialog by remember { mutableStateOf(false) }
 
-    // current viewer's join request status (pending/approved/denied)
     var myRequestStatus by remember { mutableStateOf<String?>(null) }
 
     // ----- listen to run -----
@@ -104,26 +96,23 @@ fun RunDetailsScreen(
         if (!isHost || r == null) {
             onDispose { }
         } else {
-            val subQuery = r.ref.collection("joinRequests")
+            val reg = r.ref.collection("joinRequests")
                 .whereEqualTo("status", "pending")
-
-            val reg = subQuery.addSnapshotListener { snap, e ->
-                if (e != null) {
-                    Log.e("RunDetails", "joinRequests listen error", e)
-                    return@addSnapshotListener
+                .addSnapshotListener { snap, e ->
+                    if (e != null) {
+                        Log.e("RunDetails", "joinRequests listen error", e)
+                        return@addSnapshotListener
+                    }
+                    pendingRequests = snap?.documents.orEmpty().mapNotNull { doc ->
+                        val data = doc.data ?: return@mapNotNull null
+                        JoinRequestDoc.from(data, doc.reference)
+                    }
                 }
-                val list = snap?.documents.orEmpty().mapNotNull { doc ->
-                    val data = doc.data ?: return@mapNotNull null
-                    JoinRequestDoc.from(data, doc.reference)
-                }
-                pendingRequests = list
-            }
-
             onDispose { reg.remove() }
         }
     }
 
-    // ----- listen to *my* join request (any viewer) -----
+    // ----- listen to my join request (any viewer) -----
     DisposableEffect(run?.ref, uid) {
         val r = run
         val me = uid
@@ -131,20 +120,17 @@ fun RunDetailsScreen(
             myRequestStatus = null
             onDispose { }
         } else {
-            val docRef = r.ref.collection("joinRequests").document(me)
-            val reg = docRef.addSnapshotListener { snap, e ->
-                if (e != null) {
-                    Log.e("RunDetails", "my joinRequest listen error", e)
-                    myRequestStatus = null
-                    return@addSnapshotListener
+            val reg = r.ref.collection("joinRequests").document(me)
+                .addSnapshotListener { snap, e ->
+                    if (e != null) {
+                        Log.e("RunDetails", "my joinRequest listen error", e)
+                        myRequestStatus = null
+                        return@addSnapshotListener
+                    }
+                    myRequestStatus =
+                        if (snap != null && snap.exists()) (snap.data?.get("status") as? String ?: "pending")
+                        else null
                 }
-                if (snap != null && snap.exists()) {
-                    val data = snap.data ?: emptyMap()
-                    myRequestStatus = data["status"] as? String ?: "pending"
-                } else {
-                    myRequestStatus = null
-                }
-            }
             onDispose { reg.remove() }
         }
     }
@@ -187,29 +173,19 @@ fun RunDetailsScreen(
     LaunchedEffect(run?.hostUid ?: run?.hostId) {
         val r = run ?: return@LaunchedEffect
         hostProfile = null
-
         val hostUid = r.hostUid ?: r.hostId
-        if (hostUid.isNullOrBlank()) return@LaunchedEffect
-
-        hostProfile = lookupUserProfile(db, hostUid)
+        if (!hostUid.isNullOrBlank()) hostProfile = lookupUserProfile(db, hostUid)
     }
 
     // ----- player profiles lookup -----
     LaunchedEffect(run?.playerIds?.joinToString(",")) {
         val r = run ?: return@LaunchedEffect
-        val ids = r.playerIds
-        if (ids.isEmpty()) {
+        if (r.playerIds.isEmpty()) {
             playerProfiles = emptyMap()
             return@LaunchedEffect
         }
-
         val map = mutableMapOf<String, PlayerProfile>()
-        for (id in ids) {
-            val profile = lookupUserProfile(db, id)
-            if (profile != null) {
-                map[id] = profile
-            }
-        }
+        for (id in r.playerIds) lookupUserProfile(db, id)?.let { map[id] = it }
         playerProfiles = map
     }
 
@@ -220,37 +196,23 @@ fun RunDetailsScreen(
             pendingProfiles = emptyMap()
             return@LaunchedEffect
         }
-
         val map = mutableMapOf<String, PlayerProfile>()
-        for (id in ids) {
-            val profile = lookupUserProfile(db, id)
-            if (profile != null) {
-                map[id] = profile
-            }
-        }
+        for (id in ids) lookupUserProfile(db, id)?.let { map[id] = it }
         pendingProfiles = map
     }
 
     // ----- invited profiles lookup (INVITE_ONLY) -----
     LaunchedEffect(run?.allowedUids?.sorted()?.joinToString(",")) {
         val r = run ?: return@LaunchedEffect
-        val ids = r.allowedUids
-        if (ids.isEmpty()) {
+        if (r.allowedUids.isEmpty()) {
             invitedProfiles = emptyMap()
             return@LaunchedEffect
         }
-
         val map = mutableMapOf<String, PlayerProfile>()
-        for (id in ids) {
-            val profile = lookupUserProfile(db, id)
-            if (profile != null) {
-                map[id] = profile
-            }
-        }
+        for (id in r.allowedUids) lookupUserProfile(db, id)?.let { map[id] = it }
         invitedProfiles = map
     }
 
-    // ----- UI -----
     Scaffold(
         topBar = {
             TopAppBar(
@@ -311,33 +273,23 @@ fun RunDetailsScreen(
                         else -> r.status?.replaceFirstChar { it.uppercase() } ?: "Unknown"
                     }
 
-                    val statusColor = when (statusLabel) {
-                        "Cancelled", "Ended" -> MaterialTheme.colorScheme.error
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-
-                    // Decode access
                     val accessEnum: RunAccess = remember(r.access) {
-                        try {
-                            RunAccess.valueOf(r.access)
-                        } catch (_: IllegalArgumentException) {
-                            RunAccess.OPEN
-                        }
+                        try { RunAccess.valueOf(r.access) } catch (_: IllegalArgumentException) { RunAccess.OPEN }
                     }
-                    val isAllowedForInviteOnly =
-                        uid != null && r.allowedUids.contains(uid)
-                    val hasPendingRequestFromMe = (myRequestStatus == "pending")
 
-                    // Header card
-                    Surface(
-                        tonalElevation = 2.dp,
-                        shape = MaterialTheme.shapes.medium,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            Modifier.padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
+                    val accessLabel = when (accessEnum) {
+                        RunAccess.OPEN -> "Open to anyone"
+                        RunAccess.HOST_APPROVAL -> "Host approval required"
+                        RunAccess.INVITE_ONLY -> "Invite only"
+                    }
+
+                    val isAllowedForInviteOnly = uid != null && r.allowedUids.contains(uid)
+                    val hasPendingRequestFromMe = (myRequestStatus == "pending")
+                    val joinableNow = statusLabel in listOf("Active", "Scheduled")
+
+                    // Header / summary card (compact)
+                    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
                                 text = r.name?.ifBlank { "Pickup Run" } ?: "Pickup Run",
                                 style = MaterialTheme.typography.titleLarge,
@@ -348,619 +300,311 @@ fun RunDetailsScreen(
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = courtName ?: r.courtId.orEmpty(),
-                                style = MaterialTheme.typography.bodyMedium
+
+                            RunMetaRow(
+                                mode = r.mode ?: "Unknown",
+                                players = "${r.playerCount}/${r.maxPlayers}",
+                                access = accessLabel,
+                                status = statusLabel
                             )
-                            Text(
-                                text = "Mode • ${r.mode ?: "Unknown"}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = "Players • ${r.playerCount}/${r.maxPlayers}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = "Access • " + when (accessEnum) {
-                                    RunAccess.OPEN -> "Open to anyone"
-                                    RunAccess.HOST_APPROVAL -> "Host approval required"
-                                    RunAccess.INVITE_ONLY -> "Invite only"
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            if (r.pendingJoinsCount > 0 && isHost) {
+
+                            if (joinableNow) {
                                 Text(
-                                    text = "Pending requests • ${r.pendingJoinsCount}",
+                                    text = if (openSlots > 0) "$openSlots spot${if (openSlots == 1) "" else "s"} left" else "Full",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (openSlots > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+                                )
+                            }
+
+                            if (!isHost && accessEnum == RunAccess.INVITE_ONLY && isAllowedForInviteOnly) {
+                                Text(
+                                    text = "You were invited to this run",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.primary
                                 )
                             }
 
+                            val hostLabel = hostProfile?.username ?: hostProfile?.displayName
+                            ?: r.hostId ?: r.hostUid ?: "unknown"
                             Text(
-                                text = "Status • $statusLabel",
+                                text = "Host • $hostLabel",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = statusColor
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-
-                            if (openSlots > 0 && statusLabel in listOf("Active", "Scheduled")) {
-                                Text(
-                                    "$openSlots spot${if (openSlots == 1) "" else "s"} left",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            } else if (statusLabel in listOf("Active", "Scheduled")) {
-                                Text(
-                                    text = "Full",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.secondary
-                                )
-                            }
                         }
                     }
 
-                    // Invited user banner
-                    if (!isHost && accessEnum == RunAccess.INVITE_ONLY && isAllowedForInviteOnly) {
-                        Text(
-                            text = "You were invited to this run",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-
-                    // Notice when run is ended/cancelled
-                    if (statusLabel in listOf("Cancelled", "Ended")) {
-                        Text(
-                            text = "This run has ended and is no longer joinable.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    // Players list card
-                    if (r.playerIds.isNotEmpty()) {
-                        Text("Players", style = MaterialTheme.typography.titleMedium)
-                        Surface(
-                            tonalElevation = 1.dp,
-                            shape = MaterialTheme.shapes.small,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                // Host first, then others by username
-                                val sortedIds = r.playerIds.sortedWith(
-                                    compareBy(
-                                        { pid -> if (pid == hostUidForSort) 0 else 1 },
-                                        { pid -> playerProfiles[pid]?.username ?: "" }
-                                    )
-                                )
-
-                                sortedIds.forEach { pid ->
-                                    val profile = playerProfiles[pid]
-                                    val isRowHost = pid == hostUidForSort
-
-                                    Column(
-                                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            Text(
-                                                text = profile?.username ?: pid,
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                fontWeight = if (isRowHost) FontWeight.SemiBold else FontWeight.Normal
-                                            )
-                                            if (isRowHost) {
-                                                AssistChip(
-                                                    onClick = {},
-                                                    enabled = false,
-                                                    label = { Text("Host") }
-                                                )
-                                            }
-                                        }
-
-                                        val tagPieces = listOfNotNull(
-                                            profile?.skillLevel,
-                                            profile?.playStyle,
-                                            profile?.heightBracket
-                                        )
-                                        if (tagPieces.isNotEmpty()) {
-                                            Text(
-                                                text = tagPieces.joinToString(" • "),
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-
-                                        val fav = profile?.favoriteCourts
-                                        if (fav != null && fav.isNotEmpty()) {
-                                            Text(
-                                                text = "Courts: ${fav.joinToString(", ")}",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // --- Invited players (host-only, invite-only) ---
-                    if (isHost && accessEnum == RunAccess.INVITE_ONLY) {
-                        Text("Invited players", style = MaterialTheme.typography.titleMedium)
-                        Surface(
-                            tonalElevation = 1.dp,
-                            shape = MaterialTheme.shapes.small,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                if (r.allowedUids.isEmpty()) {
-                                    Text(
-                                        text = "No invited players yet.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                } else {
-                                    r.allowedUids.forEach { invitedUid ->
-                                        val profile = invitedProfiles[invitedUid]
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Column(
-                                                verticalArrangement = Arrangement.spacedBy(2.dp),
-                                                modifier = Modifier.weight(1f)
-                                            ) {
-                                                Text(
-                                                    text = profile?.username ?: invitedUid,
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    fontWeight = FontWeight.SemiBold
-                                                )
-                                                val tags = listOfNotNull(
-                                                    profile?.skillLevel,
-                                                    profile?.playStyle,
-                                                    profile?.heightBracket
-                                                )
-                                                if (tags.isNotEmpty()) {
-                                                    Text(
-                                                        text = tags.joinToString(" • "),
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                    )
-                                                }
-                                            }
-
-                                            TextButton(
-                                                onClick = {
-                                                    scope.launch {
-                                                        try {
-                                                            r.ref.update(
-                                                                "allowedUids",
-                                                                FieldValue.arrayRemove(invitedUid)
-                                                            ).await()
-                                                        } catch (e: Exception) {
-                                                            Log.e("RunDetails", "remove invite failed", e)
-                                                        }
-                                                    }
-                                                }
-                                            ) {
-                                                Text("Remove")
-                                            }
-                                        }
-                                    }
-                                }
-
-                                Spacer(Modifier.height(4.dp))
-
-                                OutlinedButton(
-                                    onClick = { showInviteDialog = true },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text("Invite player")
-                                }
-                            }
-                        }
-                    }
-
-                    // --- Pending join requests (host only) ---
-                    if (isHost) {
-                        Text("Pending requests", style = MaterialTheme.typography.titleMedium)
-                        Surface(
-                            tonalElevation = 1.dp,
-                            shape = MaterialTheme.shapes.small,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            if (pendingRequests.isEmpty()) {
-                                Column(
-                                    modifier = Modifier.padding(12.dp)
-                                ) {
-                                    Text(
-                                        text = "No pending join requests.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            } else {
-                                Column(
-                                    modifier = Modifier.padding(12.dp),
-                                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    pendingRequests
-                                        .sortedBy { it.createdAt?.toDate()?.time ?: Long.MAX_VALUE }
-                                        .forEach { req ->
-                                            val profile = pendingProfiles[req.uid]
-                                            var rowBusy by remember(req.uid) { mutableStateOf(false) }
-
-                                            Column(
-                                                verticalArrangement = Arrangement.spacedBy(4.dp),
-                                                modifier = Modifier.fillMaxWidth()
-                                            ) {
-                                                Row(
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                                    modifier = Modifier.fillMaxWidth()
-                                                ) {
-                                                    Column(
-                                                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                                                        modifier = Modifier.weight(1f)
-                                                    ) {
-                                                        Text(
-                                                            text = profile?.username ?: req.uid,
-                                                            style = MaterialTheme.typography.bodyMedium,
-                                                            fontWeight = FontWeight.SemiBold
-                                                        )
-                                                        val tags = listOfNotNull(
-                                                            profile?.skillLevel,
-                                                            profile?.playStyle,
-                                                            profile?.heightBracket
-                                                        )
-                                                        if (tags.isNotEmpty()) {
-                                                            Text(
-                                                                text = tags.joinToString(" • "),
-                                                                style = MaterialTheme.typography.bodySmall,
-                                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                            )
-                                                        }
-                                                    }
-
-                                                    Row(
-                                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                                        verticalAlignment = Alignment.CenterVertically
-                                                    ) {
-                                                        TextButton(
-                                                            enabled = !rowBusy,
-                                                            onClick = {
-                                                                if (rowBusy || uid == null) return@TextButton
-                                                                rowBusy = true
-                                                                scope.launch {
-                                                                    try {
-                                                                        val runRef = db.collection("runs").document(runId)
-                                                                        val reqRef = req.ref
-
-                                                                        try {
-                                                                            // Try to actually join the run
-                                                                            joinRun(db, runId, req.uid)
-
-                                                                            // Mark approved + decrement pending count
-                                                                            db.runBatch { batch ->
-                                                                                batch.update(
-                                                                                    runRef,
-                                                                                    mapOf(
-                                                                                        "pendingJoinsCount" to FieldValue.increment(-1)
-                                                                                    )
-                                                                                )
-                                                                                batch.update(
-                                                                                    reqRef,
-                                                                                    mapOf(
-                                                                                        "status" to "approved",
-                                                                                        "approvedAt" to FieldValue.serverTimestamp()
-                                                                                    )
-                                                                                )
-                                                                            }.await()
-                                                                        } catch (e: Exception) {
-                                                                            Log.e("RunDetails", "approveJoin failed", e)
-                                                                            // Best-effort: mark as denied/decided so it doesn't get stuck forever
-                                                                            try {
-                                                                                db.runBatch { batch ->
-                                                                                    batch.update(
-                                                                                        runRef,
-                                                                                        mapOf(
-                                                                                            "pendingJoinsCount" to FieldValue.increment(-1)
-                                                                                        )
-                                                                                    )
-                                                                                    batch.update(
-                                                                                        reqRef,
-                                                                                        mapOf(
-                                                                                            "status" to "denied",
-                                                                                            "decidedAt" to FieldValue.serverTimestamp()
-                                                                                        )
-                                                                                    )
-                                                                                }.await()
-                                                                            } catch (inner: Exception) {
-                                                                                Log.e("RunDetails", "cleanup after approve failure", inner)
-                                                                            }
-                                                                        }
-                                                                    } finally {
-                                                                        rowBusy = false
-                                                                    }
-                                                                }
-                                                            }
-                                                        ) {
-                                                            Text("Approve")
-                                                        }
-
-                                                        TextButton(
-                                                            enabled = !rowBusy,
-                                                            onClick = {
-                                                                if (rowBusy || uid == null) return@TextButton
-                                                                rowBusy = true
-                                                                scope.launch {
-                                                                    try {
-                                                                        val runRef = db.collection("runs").document(runId)
-                                                                        val reqRef = req.ref
-                                                                        db.runBatch { batch ->
-                                                                            batch.update(
-                                                                                runRef,
-                                                                                mapOf(
-                                                                                    "pendingJoinsCount" to FieldValue.increment(-1)
-                                                                                )
-                                                                            )
-                                                                            batch.update(
-                                                                                reqRef,
-                                                                                mapOf(
-                                                                                    "status" to "denied",
-                                                                                    "decidedAt" to FieldValue.serverTimestamp()
-                                                                                )
-                                                                            )
-                                                                        }.await()
-                                                                    } catch (e: Exception) {
-                                                                        Log.e("RunDetails", "denyJoin failed", e)
-                                                                    } finally {
-                                                                        rowBusy = false
-                                                                    }
-                                                                }
-                                                            }
-                                                        ) {
-                                                            Text("Deny")
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                }
-                            }
-                        }
-                    }
-
-                    // Actions row
+                    // Actions (stays simple)
                     var joining by remember { mutableStateOf(false) }
                     var requesting by remember { mutableStateOf(false) }
                     var leaving by remember { mutableStateOf(false) }
                     var ending by remember { mutableStateOf(false) }
                     var showCancelConfirm by remember { mutableStateOf(false) }
 
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            if (!isMember) {
-                                val canAct =
-                                    statusLabel in listOf("Active", "Scheduled") && uid != null
-
-                                when (accessEnum) {
-                                    RunAccess.OPEN -> {
-                                        val canJoin =
-                                            canAct && openSlots > 0
-                                        Button(
-                                            onClick = {
-                                                if (!canJoin) return@Button
-                                                joining = true
-                                                scope.launch {
-                                                    try {
-                                                        joinRun(db, runId, uid!!)
-                                                    } catch (e: Exception) {
-                                                        Log.e("RunDetails", "joinRun failed", e)
-                                                    } finally {
-                                                        joining = false
-                                                    }
-                                                }
-                                            },
-                                            enabled = canJoin && !joining,
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .heightIn(min = 44.dp)
-                                        ) {
-                                            Text(if (joining) "Joining…" else "Join Run")
-                                        }
-                                    }
-
-                                    RunAccess.HOST_APPROVAL -> {
-                                        when {
-                                            !canAct -> {
-                                                OutlinedButton(
-                                                    onClick = {},
-                                                    enabled = false,
-                                                    modifier = Modifier
-                                                        .weight(1f)
-                                                        .heightIn(min = 44.dp)
-                                                ) {
-                                                    Text("Request to join")
-                                                }
+                        if (!isMember) {
+                            val canAct = joinableNow && uid != null
+                            when (accessEnum) {
+                                RunAccess.OPEN -> {
+                                    val canJoin = canAct && openSlots > 0
+                                    Button(
+                                        onClick = {
+                                            if (!canJoin) return@Button
+                                            joining = true
+                                            scope.launch {
+                                                try { joinRun(db, runId, uid!!) }
+                                                catch (e: Exception) { Log.e("RunDetails", "joinRun failed", e) }
+                                                finally { joining = false }
                                             }
+                                        },
+                                        enabled = canJoin && !joining,
+                                        modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                                    ) { Text(if (joining) "Joining…" else "Join") }
+                                }
 
-                                            hasPendingRequestFromMe -> {
-                                                OutlinedButton(
-                                                    onClick = {},
-                                                    enabled = false,
-                                                    modifier = Modifier
-                                                        .weight(1f)
-                                                        .heightIn(min = 44.dp)
-                                                ) {
-                                                    Text("Request sent")
-                                                }
-                                            }
-
-                                            else -> {
-                                                Button(
-                                                    onClick = {
-                                                        if (!canAct) return@Button
-                                                        requesting = true
-                                                        scope.launch {
-                                                            try {
-                                                                requestJoinRun(db, runId, uid!!)
-                                                            } catch (e: Exception) {
-                                                                Log.e("RunDetails", "requestJoinRun failed", e)
-                                                            } finally {
-                                                                requesting = false
-                                                            }
-                                                        }
-                                                    },
-                                                    enabled = !requesting,
-                                                    modifier = Modifier
-                                                        .weight(1f)
-                                                        .heightIn(min = 44.dp)
-                                                ) {
-                                                    Text(if (requesting) "Requesting…" else "Request to join")
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    RunAccess.INVITE_ONLY -> {
-                                        if (isAllowedForInviteOnly && canAct && openSlots > 0) {
-                                            Button(
-                                                onClick = {
-                                                    if (!canAct) return@Button
-                                                    joining = true
-                                                    scope.launch {
-                                                        try {
-                                                            joinRun(db, runId, uid!!)
-                                                        } catch (e: Exception) {
-                                                            Log.e("RunDetails", "joinRun failed", e)
-                                                        } finally {
-                                                            joining = false
-                                                        }
-                                                    }
-                                                },
-                                                enabled = !joining,
-                                                modifier = Modifier
-                                                    .weight(1f)
-                                                    .heightIn(min = 44.dp)
-                                            ) {
-                                                Text(if (joining) "Joining…" else "Join Run")
-                                            }
-                                        } else {
+                                RunAccess.HOST_APPROVAL -> {
+                                    when {
+                                        !canAct -> {
                                             OutlinedButton(
                                                 onClick = {},
                                                 enabled = false,
-                                                modifier = Modifier
-                                                    .weight(1f)
-                                                    .heightIn(min = 44.dp)
-                                            ) {
-                                                Text("Invite only")
-                                            }
+                                                modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                                            ) { Text("Request") }
+                                        }
+
+                                        hasPendingRequestFromMe -> {
+                                            OutlinedButton(
+                                                onClick = {},
+                                                enabled = false,
+                                                modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                                            ) { Text("Request sent") }
+                                        }
+
+                                        else -> {
+                                            Button(
+                                                onClick = {
+                                                    requesting = true
+                                                    scope.launch {
+                                                        try { requestJoinRun(db, runId, uid!!) }
+                                                        catch (e: Exception) { Log.e("RunDetails", "requestJoinRun failed", e) }
+                                                        finally { requesting = false }
+                                                    }
+                                                },
+                                                enabled = !requesting,
+                                                modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                                            ) { Text(if (requesting) "Requesting…" else "Request") }
                                         }
                                     }
                                 }
-                            } else if (isHost) {
-                                OutlinedButton(
-                                    onClick = {
-                                        if (!ending && statusLabel in listOf("Active", "Scheduled")) {
-                                            showCancelConfirm = true
-                                        }
-                                    },
-                                    enabled = !ending && statusLabel in listOf("Active", "Scheduled"),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .heightIn(min = 44.dp)
-                                ) {
-                                    Text("Cancel Run")
-                                }
-                            } else {
-                                OutlinedButton(
-                                    onClick = {
-                                        if (uid == null) return@OutlinedButton
-                                        leaving = true
-                                        scope.launch {
-                                            try {
-                                                leaveRun(db, runId, uid)
-                                            } catch (e: Exception) {
-                                                Log.e("RunDetails", "leaveRun failed", e)
-                                            } finally {
-                                                leaving = false
-                                            }
-                                        }
-                                    },
-                                    enabled = !leaving,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .heightIn(min = 44.dp)
-                                ) {
-                                    Text(if (leaving) "Leaving…" else "Leave Run")
+
+                                RunAccess.INVITE_ONLY -> {
+                                    val canJoin = canAct && isAllowedForInviteOnly && openSlots > 0
+                                    if (canJoin) {
+                                        Button(
+                                            onClick = {
+                                                joining = true
+                                                scope.launch {
+                                                    try { joinRun(db, runId, uid!!) }
+                                                    catch (e: Exception) { Log.e("RunDetails", "joinRun failed", e) }
+                                                    finally { joining = false }
+                                                }
+                                            },
+                                            enabled = !joining,
+                                            modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                                        ) { Text(if (joining) "Joining…" else "Join") }
+                                    } else {
+                                        OutlinedButton(
+                                            onClick = {},
+                                            enabled = false,
+                                            modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                                        ) { Text("Invite only") }
+                                    }
                                 }
                             }
-
+                        } else if (isHost) {
+                            OutlinedButton(
+                                onClick = { if (!ending && joinableNow) showCancelConfirm = true },
+                                enabled = !ending && joinableNow,
+                                modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                            ) { Text("Cancel run") }
+                        } else {
                             OutlinedButton(
                                 onClick = {
-                                    val lat = courtLat
-                                    val lng = courtLng
-                                    val name = courtName ?: "Court"
-                                    if (lat != null && lng != null) {
-                                        openDirections(ctx, lat, lng, name)
+                                    if (uid == null) return@OutlinedButton
+                                    leaving = true
+                                    scope.launch {
+                                        try { leaveRun(db, runId, uid) }
+                                        catch (e: Exception) { Log.e("RunDetails", "leaveRun failed", e) }
+                                        finally { leaving = false }
                                     }
                                 },
-                                enabled = courtLat != null && courtLng != null,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .heightIn(min = 44.dp)
-                            ) {
-                                Text("Directions")
-                            }
+                                enabled = !leaving,
+                                modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                            ) { Text(if (leaving) "Leaving…" else "Leave") }
                         }
 
-                        // 🔹 Host-only "Invite squad" button
-                        if (isHost && ownedTeams.isNotEmpty() && statusLabel in listOf("Active", "Scheduled")) {
-                            OutlinedButton(
-                                onClick = { showSquadSheet = true },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(min = 44.dp)
-                            ) {
-                                Text("Invite squad")
+                        OutlinedButton(
+                            onClick = {
+                                val lat = courtLat
+                                val lng = courtLng
+                                val name = courtName ?: "Court"
+                                if (lat != null && lng != null) openDirections(ctx, lat, lng, name)
+                            },
+                            enabled = courtLat != null && courtLng != null,
+                            modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                        ) { Text("Directions") }
+                    }
+
+                    if (isHost && ownedTeams.isNotEmpty() && joinableNow) {
+                        OutlinedButton(
+                            onClick = { showSquadSheet = true },
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp)
+                        ) { Text("Invite squad") }
+                    }
+
+                    // Players dropdown
+                    val sortedPlayerIds = r.playerIds.sortedWith(
+                        compareBy(
+                            { pid -> if (pid == hostUidForSort) 0 else 1 },
+                            { pid -> playerProfiles[pid]?.username ?: "" }
+                        )
+                    )
+                    ExpandableSectionCard(
+                        title = "Players",
+                        countLabel = "${r.playerCount}/${r.maxPlayers}",
+                        initiallyExpanded = true
+                    ) {
+                        if (sortedPlayerIds.isEmpty()) {
+                            EmptyHint("No players yet.")
+                        } else {
+                            sortedPlayerIds.forEach { pid ->
+                                val p = playerProfiles[pid]
+                                val isRowHost = pid == hostUidForSort
+                                val tags = listOfNotNull(p?.skillLevel, p?.playStyle, p?.heightBracket)
+                                PlayerRow(username = (p?.username ?: pid), tags = tags, isHost = isRowHost)
                             }
                         }
                     }
 
-                    // Cancel confirmation dialog for host
+                    // Invites dropdown (host-only, invite-only)
+                    if (isHost && accessEnum == RunAccess.INVITE_ONLY) {
+                        ExpandableSectionCard(
+                            title = "Invited",
+                            countLabel = "${r.allowedUids.size}",
+                            initiallyExpanded = false,
+                            trailing = {
+                                TextButton(onClick = { showInviteDialog = true }) { Text("Invite") }
+                            }
+                        ) {
+                            if (r.allowedUids.isEmpty()) {
+                                EmptyHint("No invited players yet.")
+                            } else {
+                                r.allowedUids.forEach { invitedUid ->
+                                    val p = invitedProfiles[invitedUid]
+                                    val tags = listOfNotNull(p?.skillLevel, p?.playStyle, p?.heightBracket)
+                                    InvitedRow(
+                                        username = p?.username ?: invitedUid,
+                                        tags = tags,
+                                        onRemove = {
+                                            scope.launch {
+                                                try {
+                                                    r.ref.update("allowedUids", FieldValue.arrayRemove(invitedUid)).await()
+                                                } catch (e: Exception) {
+                                                    Log.e("RunDetails", "remove invite failed", e)
+                                                }
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Pending dropdown (host-only)
+                    if (isHost) {
+                        ExpandableSectionCard(
+                            title = "Pending requests",
+                            countLabel = "${pendingRequests.size}",
+                            initiallyExpanded = pendingRequests.isNotEmpty()
+                        ) {
+                            if (pendingRequests.isEmpty()) {
+                                EmptyHint("No pending join requests.")
+                            } else {
+                                pendingRequests
+                                    .sortedBy { it.createdAt?.toDate()?.time ?: Long.MAX_VALUE }
+                                    .forEach { req ->
+                                        val p = pendingProfiles[req.uid]
+                                        val tags = listOfNotNull(p?.skillLevel, p?.playStyle, p?.heightBracket)
+                                        var rowBusy by remember(req.uid) { mutableStateOf(false) }
+
+                                        PendingRequestRow(
+                                            username = p?.username ?: req.uid,
+                                            tags = tags,
+                                            busy = rowBusy,
+                                            onApprove = {
+                                                if (rowBusy) return@PendingRequestRow
+                                                rowBusy = true
+                                                scope.launch {
+                                                    try {
+                                                        val runRef = db.collection("runs").document(runId)
+                                                        val reqRef = req.ref
+                                                        try {
+                                                            joinRun(db, runId, req.uid)
+                                                            db.runBatch { batch ->
+                                                                batch.update(runRef, "pendingJoinsCount", FieldValue.increment(-1))
+                                                                batch.update(reqRef, mapOf("status" to "approved", "approvedAt" to FieldValue.serverTimestamp()))
+                                                            }.await()
+                                                        } catch (e: Exception) {
+                                                            Log.e("RunDetails", "approveJoin failed", e)
+                                                            // cleanup so it doesn't stick forever
+                                                            try {
+                                                                db.runBatch { batch ->
+                                                                    batch.update(runRef, "pendingJoinsCount", FieldValue.increment(-1))
+                                                                    batch.update(reqRef, mapOf("status" to "denied", "decidedAt" to FieldValue.serverTimestamp()))
+                                                                }.await()
+                                                            } catch (inner: Exception) {
+                                                                Log.e("RunDetails", "cleanup after approve failure", inner)
+                                                            }
+                                                        }
+                                                    } finally {
+                                                        rowBusy = false
+                                                    }
+                                                }
+                                            },
+                                            onDeny = {
+                                                if (rowBusy) return@PendingRequestRow
+                                                rowBusy = true
+                                                scope.launch {
+                                                    try {
+                                                        val runRef = db.collection("runs").document(runId)
+                                                        val reqRef = req.ref
+                                                        db.runBatch { batch ->
+                                                            batch.update(runRef, "pendingJoinsCount", FieldValue.increment(-1))
+                                                            batch.update(reqRef, mapOf("status" to "denied", "decidedAt" to FieldValue.serverTimestamp()))
+                                                        }.await()
+                                                    } catch (e: Exception) {
+                                                        Log.e("RunDetails", "denyJoin failed", e)
+                                                    } finally {
+                                                        rowBusy = false
+                                                    }
+                                                }
+                                            }
+                                        )
+                                    }
+                            }
+                        }
+                    }
+
+                    // Cancel confirmation dialog
                     if (showCancelConfirm) {
                         AlertDialog(
-                            onDismissRequest = {
-                                if (!ending) showCancelConfirm = false
-                            },
+                            onDismissRequest = { if (!ending) showCancelConfirm = false },
                             title = { Text("Cancel run?") },
-                            text = {
-                                Text(
-                                    "This will cancel the run for everyone. " +
-                                            "Players won’t be able to join and the run will be marked as cancelled."
-                                )
-                            },
+                            text = { Text("This will cancel the run for everyone.") },
                             confirmButton = {
                                 TextButton(
                                     onClick = {
@@ -984,33 +628,13 @@ fun RunDetailsScreen(
                                             }
                                         }
                                     }
-                                ) {
-                                    Text(if (ending) "Cancelling…" else "Yes, cancel")
-                                }
+                                ) { Text(if (ending) "Cancelling…" else "Yes, cancel") }
                             },
                             dismissButton = {
-                                TextButton(
-                                    onClick = {
-                                        if (!ending) showCancelConfirm = false
-                                    }
-                                ) {
-                                    Text("Keep run")
-                                }
+                                TextButton(onClick = { if (!ending) showCancelConfirm = false }) { Text("Keep run") }
                             }
                         )
                     }
-
-                    Spacer(Modifier.height(8.dp))
-                    val hostLabel = hostProfile?.username
-                        ?: hostProfile?.displayName
-                        ?: r.hostId
-                        ?: r.hostUid
-                        ?: "unknown"
-                    Text(
-                        text = "Host: $hostLabel",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
 
                     if (showEdit) {
                         EditRunSheet(
@@ -1018,13 +642,9 @@ fun RunDetailsScreen(
                             onDismiss = { showEdit = false },
                             onSave = { patch ->
                                 scope.launch {
-                                    try {
-                                        r.ref.update(patch).await()
-                                    } catch (e: Exception) {
-                                        Log.e("RunDetails", "update failed", e)
-                                    } finally {
-                                        showEdit = false
-                                    }
+                                    try { r.ref.update(patch).await() }
+                                    catch (e: Exception) { Log.e("RunDetails", "update failed", e) }
+                                    finally { showEdit = false }
                                 }
                             }
                         )
@@ -1034,7 +654,7 @@ fun RunDetailsScreen(
         }
     }
 
-    // ---- Invite dialog (host, invite-only) ----
+    // invite dialog (host only, invite-only)
     InvitePlayerDialog(
         visible = showInviteDialog,
         run = run,
@@ -1043,100 +663,24 @@ fun RunDetailsScreen(
         onDismiss = { showInviteDialog = false }
     )
 
-    // 🔹 Squad bottom sheet
+    // squad sheet
     if (showSquadSheet) {
-        ModalBottomSheet(
-            onDismissRequest = {
-                showSquadSheet = false
-                viewModel.clearError()
-            }
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(
-                    text = "Invite squad to this run",
-                    style = MaterialTheme.typography.titleMedium
-                )
-
-                if (ownedTeams.isEmpty()) {
-                    Text(
-                        text = "You don’t have any squads yet. Create one from the Squads tab.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                } else {
-                    ownedTeams.forEach { team: Team ->
-                        Surface(
-                            tonalElevation = 1.dp,
-                            shape = MaterialTheme.shapes.medium,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column(
-                                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text(
-                                        text = team.name.ifBlank { "Unnamed squad" },
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Text(
-                                        text = "${team.memberUids.size} players",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-
-                                TextButton(
-                                    onClick = {
-                                        scope.launch {
-                                            try {
-                                                viewModel.inviteSquad(team)
-                                                showSquadSheet = false
-                                            } catch (e: Exception) {
-                                                // viewModel already sets errorMessage
-                                            }
-                                        }
-                                    }
-                                ) {
-                                    Text("Invite")
-                                }
-                            }
-                        }
+        SquadInviteSheet(
+            ownedTeams = ownedTeams,
+            errorText = squadError,
+            onDismiss = { showSquadSheet = false },
+            onInviteTeam = { team: Team ->
+                val r = run ?: return@SquadInviteSheet
+                scope.launch {
+                    try {
+                        viewModel.inviteSquad(team)
+                        showSquadSheet = false
+                    } catch (_: Exception) {
+                        // viewModel handles errorMessage
                     }
                 }
-
-                if (squadError != null) {
-                    Text(
-                        text = squadError,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-
-                Spacer(Modifier.height(8.dp))
-
-                TextButton(
-                    onClick = {
-                        showSquadSheet = false
-                        viewModel.clearError()
-                    },
-                    modifier = Modifier.align(Alignment.End)
-                ) {
-                    Text("Close")
-                }
-            }
-        }
+            },
+            onClearError = { viewModel.clearError() }
+        )
     }
 }

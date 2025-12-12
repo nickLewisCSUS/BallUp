@@ -1,4 +1,3 @@
-// ui/courts/components/CourtCard.kt
 package com.nicklewis.ballup.ui.courts.components
 
 import androidx.compose.foundation.layout.*
@@ -27,8 +26,8 @@ fun CourtCard(
     onJoinRun: (runId: String) -> Unit,
     onRequestJoinRun: (runId: String) -> Unit,
     onLeaveRun: (runId: String) -> Unit,
-    onCancelRequestRun: (runId: String) -> Unit,           // NEW
-    hasPendingRequestForRun: (runId: String) -> Boolean,   // NEW
+    onCancelRequestRun: (runId: String) -> Unit,
+    hasPendingRequestForRun: (runId: String) -> Boolean,
     onViewRun: (runId: String) -> Unit,
     starsVm: StarsViewModel,
     prefsVm: PrefsViewModel,
@@ -41,7 +40,6 @@ fun CourtCard(
     ElevatedCard {
         Column(Modifier.padding(12.dp)) {
 
-            // --- Header: name + star
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth()
@@ -65,13 +63,11 @@ fun CourtCard(
                 )
             }
 
-            // --- Meta: type • address • distance (right under the name)
             Spacer(Modifier.height(4.dp))
             MetaLine(courtRow = row, userLoc = userLoc)
 
             Spacer(Modifier.height(10.dp))
 
-            // --- Runs preview (if any)
             if (row.runsForCard.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     row.runsForCard.forEach { rr ->
@@ -82,8 +78,8 @@ fun CourtCard(
                             onJoin = { onJoinRun(rr.id) },
                             onRequestJoin = { onRequestJoinRun(rr.id) },
                             onLeave = { onLeaveRun(rr.id) },
-                            hasPendingRequest = hasPendingRequestForRun(rr.id),      // NEW
-                            onCancelRequest = { onCancelRequestRun(rr.id) }          // NEW
+                            hasPendingRequest = hasPendingRequestForRun(rr.id),
+                            onCancelRequest = { onCancelRequestRun(rr.id) }
                         )
                     }
                 }
@@ -92,7 +88,6 @@ fun CourtCard(
                 Spacer(Modifier.height(10.dp))
             }
 
-            // --- Footer actions: compact + balanced
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -101,6 +96,7 @@ fun CourtCard(
             ) {
                 TextButton(
                     onClick = {
+                        // ✅ This must match your NavHost route exactly
                         AppNavControllerHolder.navController
                             ?.navigate("court/$courtId/runs")
                     }
@@ -127,7 +123,6 @@ private fun MetaLine(courtRow: CourtRow, userLoc: LatLng?) {
     val type = court.type?.uppercase().orEmpty()
     val addr = court.address.orEmpty()
 
-    // distance if we can compute it
     val distanceText = run {
         val lat = court.geo?.lat
         val lng = court.geo?.lng

@@ -52,7 +52,6 @@ fun CourtsMapScreen(
     var runs by remember { mutableStateOf(listOf<Pair<String, Run>>()) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    // Cache of uid -> username (or fallback)
     val userNames = remember { mutableStateMapOf<String, String>() }
 
     val cam: MapCameraVM = viewModel()
@@ -63,19 +62,15 @@ fun CourtsMapScreen(
 
     val runsViewModel: RunsViewModel = viewModel()
 
-    // Stars / favorites
     val starsVm: StarsViewModel = viewModel()
     val starredIds by starsVm.starred.collectAsState()
     var showStarredOnly by rememberSaveable { mutableStateOf(false) }
 
-    // Filter dropdown state
     var filtersExpanded by remember { mutableStateOf(false) }
 
-    // Start-run dialog state
     var showCreate by remember { mutableStateOf<String?>(null) }
     var dialogError by remember { mutableStateOf<String?>(null) }
 
-    // ----- Firestore listeners for courts & runs -----
     LaunchedEffect(Unit) {
         db.collection("courts")
             .orderBy("name", Query.Direction.ASCENDING)
@@ -90,9 +85,10 @@ fun CourtsMapScreen(
             }
     }
 
+    // ✅ UPDATED: listen to active + scheduled (not cancelled)
     LaunchedEffect(Unit) {
         db.collection("runs")
-            .whereEqualTo("status", "active")
+            .whereIn("status", listOf("active", "scheduled"))
             .addSnapshotListener { snap, e ->
                 if (e != null) {
                     error = e.message
@@ -104,7 +100,6 @@ fun CourtsMapScreen(
             }
     }
 
-    // Whenever runs change, fetch usernames for any hostIds / playerIds we don't know yet
     LaunchedEffect(runs) {
         val ids = mutableSetOf<String>()
         runs.forEach { (_, run) ->
@@ -131,14 +126,12 @@ fun CourtsMapScreen(
         }
     }
 
-    // Map state
     var selected by remember { mutableStateOf<Pair<String, Court>?>(null) }
     val context = LocalContext.current
     val mapView = rememberMapViewWithLifecycle()
     var gmap by remember { mutableStateOf<com.google.android.gms.maps.GoogleMap?>(null) }
     val fused = remember { LocationServices.getFusedLocationProviderClient(context) }
 
-    // ----- Location permissions -----
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
@@ -165,7 +158,6 @@ fun CourtsMapScreen(
         }
     }
 
-    // ----- Map + filters UI -----
     Box(Modifier.fillMaxSize()) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -209,7 +201,6 @@ fun CourtsMapScreen(
             }
         )
 
-        // Compact "Filters" button (top-left) with dropdown menu
         Box(
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -227,51 +218,39 @@ fun CourtsMapScreen(
                 expanded = filtersExpanded,
                 onDismissRequest = { filtersExpanded = false }
             ) {
-                // Indoor
                 DropdownMenuItem(
                     text = {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Checkbox(
-                                checked = showIndoor,
-                                onCheckedChange = null
-                            )
+                            Checkbox(checked = showIndoor, onCheckedChange = null)
                             Text("Indoor courts")
                         }
                     },
                     onClick = { onToggleIndoor() }
                 )
 
-                // Outdoor
                 DropdownMenuItem(
                     text = {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Checkbox(
-                                checked = showOutdoor,
-                                onCheckedChange = null
-                            )
+                            Checkbox(checked = showOutdoor, onCheckedChange = null)
                             Text("Outdoor courts")
                         }
                     },
                     onClick = { onToggleOutdoor() }
                 )
 
-                // Starred only
                 DropdownMenuItem(
                     text = {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Checkbox(
-                                checked = showStarredOnly,
-                                onCheckedChange = null
-                            )
+                            Checkbox(checked = showStarredOnly, onCheckedChange = null)
                             Text("Starred courts only")
                         }
                     },
@@ -281,7 +260,6 @@ fun CourtsMapScreen(
         }
     }
 
-    // ----- Markers + auto-fit behavior -----
     LaunchedEffect(
         gmap,
         courts,
@@ -294,7 +272,6 @@ fun CourtsMapScreen(
         val map = gmap ?: return@LaunchedEffect
         map.clear()
 
-        // Filter by indoor/outdoor
         val base = courts.filter { (_, c) ->
             when (c.type?.trim()?.lowercase()) {
                 "indoor" -> showIndoor
@@ -303,12 +280,7 @@ fun CourtsMapScreen(
             }
         }
 
-        // Optional: starred only
-        val filtered = if (!showStarredOnly) {
-            base
-        } else {
-            base.filter { (id, _) -> id in starredIds }
-        }
+        val filtered = if (!showStarredOnly) base else base.filter { (id, _) -> id in starredIds }
 
         val nowMs = System.currentTimeMillis()
         val points = mutableListOf<LatLng>()
@@ -320,7 +292,8 @@ fun CourtsMapScreen(
                 val p = LatLng(lat, lng)
 
                 val hasLiveRun = runs.any { (_, run) ->
-                    if (run.courtId != id || run.status != "active") return@any false
+                    if (run.courtId != id) return@any false
+                    if (run.status != "active") return@any false
 
                     val startMs = run.startsAt?.toDate()?.time ?: return@any false
                     val endMs = run.endsAt?.toDate()?.time ?: startMs
@@ -369,7 +342,6 @@ fun CourtsMapScreen(
         }
     }
 
-    // ----- Bottom sheet for selected court -----
     selected?.let { selectedCourt ->
         CourtBottomSheet(
             selected = selectedCourt,
@@ -386,7 +358,6 @@ fun CourtsMapScreen(
         )
     }
 
-    // ----- StartRunDialog (same flow as CourtsListScreen) -----
     showCreate?.let { courtId ->
         StartRunDialog(
             visible = true,
@@ -412,7 +383,6 @@ fun CourtsMapScreen(
         )
     }
 
-    // ----- Error text -----
     error?.let {
         Text(
             "Map error: $it",

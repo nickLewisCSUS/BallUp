@@ -1,208 +1,252 @@
 package com.nicklewis.ballup.ui.runs
 
-import androidx.compose.foundation.clickable
+import android.util.Log
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
-import com.nicklewis.ballup.model.Run
+import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Query
+import com.nicklewis.ballup.data.cancelJoinRequest
+import com.nicklewis.ballup.data.joinRun
+import com.nicklewis.ballup.data.leaveRun
+import com.nicklewis.ballup.data.requestJoinRun
 import com.nicklewis.ballup.nav.AppNavControllerHolder
+import com.nicklewis.ballup.ui.courts.components.RunRow
+import com.nicklewis.ballup.util.RowRun
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
-import java.text.SimpleDateFormat
-import java.util.Locale
 
-// Local wrapper so we can keep both doc id + Run data
-private data class CourtRunItem(
-    val id: String,
-    val run: Run
-)
-
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CourtRunsScreen(
     courtId: String,
     onBack: () -> Unit
 ) {
-    val db = FirebaseFirestore.getInstance()
-    var isLoading by remember { mutableStateOf(true) }
-    var runs by remember { mutableStateOf<List<CourtRunItem>>(emptyList()) }
-    var error by remember { mutableStateOf<String?>(null) }
-
+    val db = remember { FirebaseFirestore.getInstance() }
+    val uid = FirebaseAuth.getInstance().currentUser?.uid
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(courtId) {
-        scope.launch {
-            try {
-                isLoading = true
-                val snap = db.collection("runs")
-                    .whereEqualTo("courtId", courtId)
-                    .get()
-                    .await()
+    var isLoading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
 
-                val items = snap.documents.mapNotNull { doc ->
-                    val run = doc.toObject(Run::class.java)
-                    run?.let { CourtRunItem(id = doc.id, run = it) }
+    var allRuns by remember { mutableStateOf<List<RowRun>>(emptyList()) }
+    var query by remember { mutableStateOf("") }
+
+    // runId -> pending request (HOST_APPROVAL)
+    val pendingRequests = remember { mutableStateMapOf<String, Boolean>() }
+
+    // Live listener
+    DisposableEffect(courtId) {
+        var reg: ListenerRegistration? = null
+        isLoading = true
+        error = null
+
+        reg = db.collection("runs")
+            .whereEqualTo("courtId", courtId)
+            .whereIn("status", listOf("active", "scheduled")) // ✅ no cancelled
+            .orderBy("startsAt", Query.Direction.ASCENDING)
+            .addSnapshotListener { snap, e ->
+                if (e != null) {
+                    error = e.message ?: "Failed to load runs"
+                    isLoading = false
+                    return@addSnapshotListener
                 }
 
-                // Optional: sort by start time
-                runs = items.sortedBy { it.run.startsAt?.toDate() ?: it.run.startTime?.toDate() }
+                val nowMillis = System.currentTimeMillis()
 
-                error = null
-            } catch (e: Exception) {
-                error = e.message ?: "Failed to load runs"
-            } finally {
+                val rows = snap?.documents.orEmpty().mapNotNull { doc ->
+                    val startsAt = doc.getTimestamp("startsAt") ?: doc.getTimestamp("startTime")
+                    val endsAt = doc.getTimestamp("endsAt") ?: doc.getTimestamp("endTime")
+
+                    // ✅ hide already-ended runs
+                    val endMillis = endsAt?.toDate()?.time
+                    if (endMillis != null && endMillis < nowMillis) return@mapNotNull null
+
+                    val playerIds = (doc.get("playerIds") as? List<String>).orEmpty()
+                    val allowedUids = (doc.get("allowedUids") as? List<String>).orEmpty()
+
+                    val playerCount = (doc.getLong("playerCount")?.toInt()) ?: playerIds.size
+                    val maxPlayers = (doc.getLong("maxPlayers")?.toInt()) ?: 0
+
+                    val access = doc.getString("access")
+                        ?: doc.getString("mode")
+                        ?: "OPEN"
+
+                    val hostId = doc.getString("hostId") ?: ""
+                    val hostUid = doc.getString("hostUid") ?: doc.getString("hostId")
+
+                    val name = doc.getString("name")
+
+                    RowRun(
+                        id = doc.id,
+                        name = name,
+                        startsAt = startsAt,
+                        endsAt = endsAt,
+                        playerCount = playerCount,
+                        maxPlayers = maxPlayers,
+                        playerIds = playerIds,
+                        access = access,
+                        hostId = hostId,
+                        hostUid = hostUid,
+                        allowedUids = allowedUids
+                    )
+                }
+
+                allRuns = rows.sortedBy { it.startsAt?.toDate()?.time ?: Long.MAX_VALUE }
                 isLoading = false
+                error = null
             }
+
+        onDispose { reg?.remove() }
+    }
+
+    val visibleRuns = remember(allRuns, query) {
+        val q = query.trim().lowercase()
+        if (q.isBlank()) allRuns
+        else allRuns.filter { rr ->
+            (rr.name ?: "").lowercase().contains(q) ||
+                    rr.id.lowercase().contains(q) ||
+                    rr.access.lowercase().contains(q)
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-    ) {
-
-        // --- Header ---
-        Text(
-            text = "Runs at this court",
-            style = MaterialTheme.typography.titleLarge
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = "Court ID: $courtId",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        Spacer(Modifier.height(16.dp))
-
-        when {
-            isLoading -> {
-                Column(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    CircularProgressIndicator()
-                    Spacer(Modifier.height(12.dp))
-                    Text("Loading runs…")
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Runs at this court") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
                 }
-            }
+            )
+        }
+    ) { pad ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(pad)
+                .padding(16.dp)
+        ) {
+            // Search bar
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = { Text("Search runs") }
+            )
 
-            error != null -> {
-                Text(
-                    text = error!!,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Spacer(Modifier.height(16.dp))
-                Button(onClick = onBack) {
-                    Text("Back")
-                }
-            }
+            Spacer(Modifier.height(12.dp))
 
-            runs.isEmpty() -> {
-                Text(
-                    text = "No runs found for this court.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Spacer(Modifier.height(16.dp))
-                Button(onClick = onBack) {
-                    Text("Back")
-                }
-            }
-
-            else -> {
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.weight(1f, fill = true)
-                ) {
-                    items(runs, key = { it.id }) { item ->
-                        RunCard(item = item)
+            when {
+                isLoading -> {
+                    Column(
+                        Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        CircularProgressIndicator()
+                        Spacer(Modifier.height(10.dp))
+                        Text("Loading runs…")
                     }
                 }
 
-                Spacer(Modifier.height(16.dp))
+                error != null -> {
+                    Text(
+                        text = error!!,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
 
-                Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-                    Text("Back")
+                visibleRuns.isEmpty() -> {
+                    Text(
+                        text = if (query.isBlank())
+                            "No upcoming or active runs for this court."
+                        else
+                            "No runs match your search.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+
+                else -> {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(visibleRuns, key = { it.id }) { rr ->
+                            RunRow(
+                                rr = rr,
+                                currentUid = uid,
+                                onView = {
+                                    AppNavControllerHolder.navController
+                                        ?.navigate("run/${rr.id}") {
+                                            launchSingleTop = true
+                                            restoreState = true
+                                        }
+                                },
+                                onJoin = {
+                                    if (uid == null) return@RunRow
+                                    scope.launch {
+                                        try {
+                                            joinRun(db, rr.id, uid)
+                                        } catch (e: Exception) {
+                                            Log.e("CourtRuns", "joinRun failed", e)
+                                        }
+                                    }
+                                },
+                                onRequestJoin = {
+                                    if (uid == null) return@RunRow
+                                    scope.launch {
+                                        try {
+                                            requestJoinRun(db, rr.id, uid)
+                                            pendingRequests[rr.id] = true
+                                        } catch (e: Exception) {
+                                            Log.e("CourtRuns", "requestJoinRun failed", e)
+                                            if (e.message?.contains("already requested", ignoreCase = true) == true) {
+                                                pendingRequests[rr.id] = true
+                                            }
+                                        }
+                                    }
+                                },
+                                onLeave = {
+                                    if (uid == null) return@RunRow
+                                    scope.launch {
+                                        try {
+                                            leaveRun(db, rr.id, uid)
+                                        } catch (e: Exception) {
+                                            Log.e("CourtRuns", "leaveRun failed", e)
+                                        }
+                                    }
+                                },
+                                hasPendingRequest = (pendingRequests[rr.id] == true),
+                                onCancelRequest = {
+                                    if (uid == null) return@RunRow
+                                    scope.launch {
+                                        try {
+                                            cancelJoinRequest(db, rr.id, uid)
+                                            pendingRequests[rr.id] = false
+                                        } catch (e: Exception) {
+                                            Log.e("CourtRuns", "cancelJoinRequest failed", e)
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                    }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun RunCard(item: CourtRunItem) {
-    val run = item.run
-
-    val timeText = remember(run.startsAt, run.startTime) {
-        val ts = run.startsAt ?: run.startTime
-        ts?.let {
-            val df = SimpleDateFormat("EEE, MMM d • h:mm a", Locale.getDefault())
-            df.format(it.toDate())
-        } ?: "Time TBD"
-    }
-
-    // Prefer explicit playerCount, fall back to playerIds size if needed
-    val players = remember(run.playerCount, run.playerIds) {
-        when {
-            run.playerCount > 0 -> run.playerCount
-            run.playerIds != null -> run.playerIds!!.size
-            else -> 0
-        }
-    }
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable {
-                AppNavControllerHolder.navController
-                    ?.navigate("run/${item.id}")
-            },
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .padding(12.dp)
-                .fillMaxWidth()
-        ) {
-            Text(
-                text = if (run.name.isNotBlank()) run.name else "Pickup run",
-                style = MaterialTheme.typography.titleMedium
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = "Starts: $timeText",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = "Players: $players / ${run.maxPlayers}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = "Mode: ${run.mode} • Status: ${run.status}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
         }
     }
 }

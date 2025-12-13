@@ -190,7 +190,8 @@ suspend fun cancelJoinRequest(
  *
  * Behavior:
  * - Only the host can call this.
- * - OPEN + INVITE_ONLY → members are added directly to playerIds (up to maxPlayers).
+ * - OPEN → (same as before) members are added directly to playerIds (up to maxPlayers).
+ * - INVITE_ONLY → members are added to allowedUids (so Cloud Functions can create runInvites + send notifications).
  * - HOST_APPROVAL → creates pending joinRequests for each member.
  */
 suspend fun inviteSquadToRun(
@@ -223,18 +224,22 @@ suspend fun inviteSquadToRun(
         val currentPlayers = (run.playerIds ?: emptyList()).toMutableList()
         val currentSet = currentPlayers.toSet()
 
+        // INVITE_ONLY depends on allowedUids, so we must respect existing allowedUids too
+        @Suppress("UNCHECKED_CAST")
+        val currentAllowed = (runSnap.get("allowedUids") as? List<String>) ?: emptyList()
+        val allowedSet = currentAllowed.toSet()
+
         val teamMembers = team.memberUids.toSet()
-
-        // remove anyone already in the run
-        val newMembers = teamMembers - currentSet
-
-        if (newMembers.isEmpty()) {
-            return@runTransaction null
-        }
 
         when (access) {
             RunAccess.HOST_APPROVAL.name -> {
-                // create pending joinRequests for each member
+                // create pending joinRequests for each member not already in run
+                val newMembers = (teamMembers - currentSet)
+                    .filter { it != requesterUid }
+                    .toSet()
+
+                if (newMembers.isEmpty()) return@runTransaction null
+
                 newMembers.forEach { memberUid ->
                     val reqRef = runRef.collection("joinRequests").document(memberUid)
                     val existing = tx.get(reqRef)
@@ -255,16 +260,20 @@ suspend fun inviteSquadToRun(
                 }
             }
 
-            RunAccess.OPEN.name,
-            RunAccess.INVITE_ONLY.name -> {
+            RunAccess.OPEN.name -> {
                 // treat host squad invite as direct approval; obey maxPlayers
+                val newMembers = (teamMembers - currentSet)
+                    .filter { it != requesterUid }
+                    .toList()
+
+                if (newMembers.isEmpty()) return@runTransaction null
+
                 val availableSlots = maxPlayers - currentPlayers.size
-                if (availableSlots <= 0) {
-                    // run is full, nothing to add
-                    return@runTransaction null
-                }
+                if (availableSlots <= 0) return@runTransaction null
+
                 val toAdd = newMembers.take(availableSlots)
                 currentPlayers += toAdd
+
                 tx.update(
                     runRef,
                     mapOf(
@@ -275,10 +284,24 @@ suspend fun inviteSquadToRun(
                 )
             }
 
-            else -> {
-                // unknown access mode → default to no-op
-                return@runTransaction null
+            RunAccess.INVITE_ONLY.name -> {
+                // ✅ invite-only: add members to allowedUids (NOT playerIds)
+                // so backend can fan out runInvites + send run_invite notification
+                val toInvite = (teamMembers - allowedSet - setOf(requesterUid))
+                    .toList()
+
+                if (toInvite.isEmpty()) return@runTransaction null
+
+                tx.update(
+                    runRef,
+                    mapOf(
+                        "allowedUids" to FieldValue.arrayUnion(*toInvite.toTypedArray()),
+                        "lastHeartbeatAt" to FieldValue.serverTimestamp()
+                    )
+                )
             }
+
+            else -> return@runTransaction null
         }
 
         null

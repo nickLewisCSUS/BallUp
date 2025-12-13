@@ -15,10 +15,11 @@ setGlobalOptions({ region: "us-central1", maxInstances: 1 });
 
 export { cleanupStaleRuns, purgeOldFinishedRuns } from "./cleanupRuns";
 export {
-  notifyRunInviteCreated,
   createRunInvitesForNewRun,
+  createRunInvitesOnAllowedUidsAdded,
+  deleteRunInvitesOnAllowedUidsRemoved,
+  notifyRunInviteCreated,
 } from "./runInvites";
-
 const db = admin.firestore();
 const messaging = admin.messaging();
 

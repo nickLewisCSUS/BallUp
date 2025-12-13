@@ -21,8 +21,11 @@ fun RunRow(
     onJoin: () -> Unit,
     onRequestJoin: () -> Unit,
     onLeave: () -> Unit,
-    hasPendingRequest: Boolean,      // NEW
-    onCancelRequest: () -> Unit      // NEW
+    hasPendingRequest: Boolean,
+    onCancelRequest: () -> Unit,
+
+    // ✅ NEW: pass a nice label like username/displayName from CourtsListScreen
+    hostLabel: String? = null
 ) {
     val zone = ZoneId.systemDefault()
     val s = rr.startsAt?.toDate()?.toInstant()?.atZone(zone)?.toLocalDateTime()
@@ -48,10 +51,8 @@ fun RunRow(
 
     val isJoined = currentUid != null && rr.playerIds?.contains(currentUid) == true
 
-    // RowRun only has hostId, so we just compare against that
     val isHost = currentUid != null && (
-            rr.hostId == currentUid ||
-                    rr.hostUid == currentUid
+            rr.hostId == currentUid || rr.hostUid == currentUid
             )
 
     // Host is allowed to leave only if more than 1 player exists
@@ -69,6 +70,17 @@ fun RunRow(
         openSlots > 0 -> "Open"
         rr.playerCount >= rr.maxPlayers -> "Full"
         else -> "Active"
+    }
+
+    // ✅ Host label to display
+    val hostText = remember(hostLabel, rr.hostId, rr.hostUid) {
+        val nice = hostLabel?.trim().orEmpty()
+        when {
+            nice.isNotBlank() -> nice
+            !rr.hostId.isNullOrBlank() -> rr.hostId!!
+            !rr.hostUid.isNullOrBlank() -> rr.hostUid!!
+            else -> "Unknown"
+        }
     }
 
     var showLeaveConfirm by remember { mutableStateOf(false) }
@@ -93,6 +105,7 @@ fun RunRow(
 
             Spacer(Modifier.height(2.dp))
 
+            // Time + count
             Text(
                 text = buildString {
                     if (timeLabel.isNotBlank()) append(timeLabel)
@@ -104,6 +117,15 @@ fun RunRow(
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // ✅ NEW: Host line
+            Text(
+                text = "Host • $hostText",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
 
             Spacer(Modifier.height(6.dp))
@@ -126,10 +148,7 @@ fun RunRow(
                                 FilledTonalButton(
                                     onClick = onJoin,
                                     shape = MaterialTheme.shapes.medium,
-                                    contentPadding = PaddingValues(
-                                        horizontal = 14.dp,
-                                        vertical = 6.dp
-                                    )
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                                 ) {
                                     Text("Join", style = MaterialTheme.typography.labelLarge)
                                 }
@@ -137,37 +156,22 @@ fun RunRow(
 
                             RunAccess.HOST_APPROVAL -> {
                                 if (isAllowedByAllowList) {
-                                    // ✅ Invited players auto-skip request flow
                                     FilledTonalButton(
                                         onClick = onJoin,
                                         shape = MaterialTheme.shapes.medium,
-                                        contentPadding = PaddingValues(
-                                            horizontal = 14.dp,
-                                            vertical = 6.dp
-                                        )
+                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                                     ) {
-                                        Text(
-                                            "Join",
-                                            style = MaterialTheme.typography.labelLarge
-                                        )
+                                        Text("Join", style = MaterialTheme.typography.labelLarge)
                                     }
                                 } else if (!hasPendingRequest) {
-                                    // Normal state: user can request
                                     FilledTonalButton(
                                         onClick = onRequestJoin,
                                         shape = MaterialTheme.shapes.medium,
-                                        contentPadding = PaddingValues(
-                                            horizontal = 14.dp,
-                                            vertical = 6.dp
-                                        )
+                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                                     ) {
-                                        Text(
-                                            "Request",
-                                            style = MaterialTheme.typography.labelLarge
-                                        )
+                                        Text("Request", style = MaterialTheme.typography.labelLarge)
                                     }
                                 } else {
-                                    // Pending state: show "Requested" + Undo
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -176,15 +180,9 @@ fun RunRow(
                                             onClick = { /* no-op */ },
                                             enabled = false,
                                             shape = MaterialTheme.shapes.medium,
-                                            contentPadding = PaddingValues(
-                                                horizontal = 14.dp,
-                                                vertical = 6.dp
-                                            )
+                                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                                         ) {
-                                            Text(
-                                                "Requested",
-                                                style = MaterialTheme.typography.labelLarge
-                                            )
+                                            Text("Requested", style = MaterialTheme.typography.labelLarge)
                                         }
                                         TextButton(onClick = onCancelRequest) {
                                             Text("Undo", style = MaterialTheme.typography.labelSmall)
@@ -198,10 +196,7 @@ fun RunRow(
                                     FilledTonalButton(
                                         onClick = onJoin,
                                         shape = MaterialTheme.shapes.medium,
-                                        contentPadding = PaddingValues(
-                                            horizontal = 14.dp,
-                                            vertical = 6.dp
-                                        )
+                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                                     ) {
                                         Text("Join", style = MaterialTheme.typography.labelLarge)
                                     }
@@ -210,15 +205,9 @@ fun RunRow(
                                         onClick = { /* no-op */ },
                                         enabled = false,
                                         shape = MaterialTheme.shapes.medium,
-                                        contentPadding = PaddingValues(
-                                            horizontal = 14.dp,
-                                            vertical = 6.dp
-                                        )
+                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                                     ) {
-                                        Text(
-                                            "Invite only",
-                                            style = MaterialTheme.typography.labelLarge
-                                        )
+                                        Text("Invite only", style = MaterialTheme.typography.labelLarge)
                                     }
                                 }
                             }
@@ -230,10 +219,7 @@ fun RunRow(
                         OutlinedButton(
                             onClick = { showLeaveConfirm = true },
                             shape = MaterialTheme.shapes.medium,
-                            contentPadding = PaddingValues(
-                                horizontal = 14.dp,
-                                vertical = 6.dp
-                            )
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                         ) {
                             Text("Leave", style = MaterialTheme.typography.labelLarge)
                         }
@@ -247,10 +233,7 @@ fun RunRow(
                         OutlinedButton(
                             onClick = { showLeaveConfirm = true },
                             shape = MaterialTheme.shapes.medium,
-                            contentPadding = PaddingValues(
-                                horizontal = 14.dp,
-                                vertical = 6.dp
-                            )
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                         ) {
                             Text("Leave", style = MaterialTheme.typography.labelLarge)
                         }
@@ -265,10 +248,7 @@ fun RunRow(
         AlertDialog(
             onDismissRequest = { showLeaveConfirm = false },
             title = {
-                Text(
-                    if (hostCanLeave) "Leave run?"
-                    else "Confirm leave"
-                )
+                Text(if (hostCanLeave) "Leave run?" else "Confirm leave")
             },
             text = {
                 Text(

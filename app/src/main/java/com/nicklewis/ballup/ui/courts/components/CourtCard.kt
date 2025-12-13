@@ -31,6 +31,9 @@ fun CourtCard(
     onViewRun: (runId: String) -> Unit,
     starsVm: StarsViewModel,
     prefsVm: PrefsViewModel,
+
+    // ✅ NEW: host uid -> label resolver (username/displayName)
+    hostLabelForUid: (String) -> String?
 ) {
     val courtId = row.courtId
     val court = row.court
@@ -71,6 +74,9 @@ fun CourtCard(
             if (row.runsForCard.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     row.runsForCard.forEach { rr ->
+                        val hostUid = (rr.hostUid ?: rr.hostId).orEmpty()
+                        val hostLabel = hostLabelForUid(hostUid)
+
                         RunRow(
                             rr = rr,
                             currentUid = uid,
@@ -79,7 +85,10 @@ fun CourtCard(
                             onRequestJoin = { onRequestJoinRun(rr.id) },
                             onLeave = { onLeaveRun(rr.id) },
                             hasPendingRequest = hasPendingRequestForRun(rr.id),
-                            onCancelRequest = { onCancelRequestRun(rr.id) }
+                            onCancelRequest = { onCancelRequestRun(rr.id) },
+
+                            // ✅ NEW (you add this param to RunRow)
+                            hostLabel = hostLabel
                         )
                     }
                 }
@@ -96,7 +105,6 @@ fun CourtCard(
             ) {
                 TextButton(
                     onClick = {
-                        // ✅ This must match your NavHost route exactly
                         AppNavControllerHolder.navController
                             ?.navigate("court/$courtId/runs")
                     }

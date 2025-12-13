@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CardDefaults
@@ -59,7 +60,6 @@ import com.nicklewis.ballup.vm.PrefsViewModel
 import com.nicklewis.ballup.vm.StarsViewModel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
-import androidx.compose.foundation.layout.height
 
 private data class RunInviteUi(
     val id: String,
@@ -163,6 +163,45 @@ fun CourtsListScreen(
         }
     }
 
+    // ✅ host uid -> label cache (username/displayName)
+    val hostLabels = remember { mutableStateMapOf<String, String>() }
+
+// ✅ Fetch host labels for runs currently visible (cheap + cached)
+    LaunchedEffect(visibleRows) {
+        try {
+            val hostUids: List<String> = visibleRows
+                .flatMap { row -> row.runsForCard }
+                .mapNotNull { rr ->
+                    val h = (rr.hostUid ?: rr.hostId)?.trim()
+                    h?.takeIf { it.isNotBlank() }
+                }
+                .distinct()
+
+            val toFetch = hostUids.filter { uid -> !hostLabels.containsKey(uid) }
+            if (toFetch.isEmpty()) return@LaunchedEffect
+
+            toFetch.forEach { hostUid ->
+                try {
+                    val doc = db.collection("users").document(hostUid).get().await()
+                    val username = doc.getString("username")
+                    val displayName = doc.getString("displayName")
+
+                    val label = when {
+                        !displayName.isNullOrBlank() -> displayName
+                        !username.isNullOrBlank() -> username
+                        else -> hostUid
+                    }
+                    hostLabels[hostUid] = label
+                } catch (e: Exception) {
+                    Log.w("CourtsList", "Failed to load host label for $hostUid", e)
+                    hostLabels[hostUid] = hostUid
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("CourtsList", "Host label prefetch failed", e)
+        }
+    }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { scaffoldPadding ->
@@ -216,9 +255,7 @@ fun CourtsListScreen(
                         if (uid == null) return@RunInviteCard
                         scope.launch {
                             try {
-                                // auto-join run
                                 joinRun(db, invite.runId, uid)
-                                // mark invite accepted
                                 db.collection("runInvites")
                                     .document(invite.id)
                                     .update("status", "accepted")
@@ -346,10 +383,7 @@ fun CourtsListScreen(
                                         leaveRun(db, runId, uid)
                                     } catch (e: Exception) {
                                         if (e.message?.contains("HOST_SOLO_CANNOT_LEAVE") == true) {
-                                            Log.w(
-                                                "Runs",
-                                                "Host is solo and cannot leave; must cancel run."
-                                            )
+                                            Log.w("Runs", "Host is solo and cannot leave; must cancel run.")
                                             snackbarHostState.showSnackbar(
                                                 message = "You’re the only player in this run. Cancel it instead.",
                                                 withDismissAction = true
@@ -396,7 +430,12 @@ fun CourtsListScreen(
                                 }
                             },
                             starsVm = starsVm,
-                            prefsVm = prefsVm
+                            prefsVm = prefsVm,
+
+                            // NEW: host label resolver passed to CourtCard
+                            hostLabelForUid = { hostUid ->
+                                hostLabels[hostUid]
+                            }
                         )
                     }
                 }
@@ -424,7 +463,7 @@ fun CourtsListScreen(
                         )
                     },
                     errorMessage = dialogError,
-                    teams = myTeams          // ✅ real squads fed into dialog
+                    teams = myTeams
                 )
             }
         }

@@ -7,6 +7,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.GroupAdd
+import androidx.compose.material.icons.filled.Navigation
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,6 +29,8 @@ import com.nicklewis.ballup.model.Team
 import com.nicklewis.ballup.util.openDirections
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+
+private val ActionBtnHeight = 48.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -334,7 +339,7 @@ fun RunDetailsScreen(
                         }
                     }
 
-                    // Actions (stays simple)
+                    // Actions (stylized)
                     var joining by remember { mutableStateOf(false) }
                     var requesting by remember { mutableStateOf(false) }
                     var leaving by remember { mutableStateOf(false) }
@@ -362,7 +367,8 @@ fun RunDetailsScreen(
                                             }
                                         },
                                         enabled = canJoin && !joining,
-                                        modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                                        modifier = Modifier.weight(1f).height(ActionBtnHeight),
+                                        shape = MaterialTheme.shapes.large
                                     ) { Text(if (joining) "Joining…" else "Join") }
                                 }
 
@@ -372,7 +378,8 @@ fun RunDetailsScreen(
                                             OutlinedButton(
                                                 onClick = {},
                                                 enabled = false,
-                                                modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                                                modifier = Modifier.weight(1f).height(ActionBtnHeight),
+                                                shape = MaterialTheme.shapes.large
                                             ) { Text("Request") }
                                         }
 
@@ -380,7 +387,8 @@ fun RunDetailsScreen(
                                             OutlinedButton(
                                                 onClick = {},
                                                 enabled = false,
-                                                modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                                                modifier = Modifier.weight(1f).height(ActionBtnHeight),
+                                                shape = MaterialTheme.shapes.large
                                             ) { Text("Request sent") }
                                         }
 
@@ -395,7 +403,8 @@ fun RunDetailsScreen(
                                                     }
                                                 },
                                                 enabled = !requesting,
-                                                modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                                                modifier = Modifier.weight(1f).height(ActionBtnHeight),
+                                                shape = MaterialTheme.shapes.large
                                             ) { Text(if (requesting) "Requesting…" else "Request") }
                                         }
                                     }
@@ -414,23 +423,35 @@ fun RunDetailsScreen(
                                                 }
                                             },
                                             enabled = !joining,
-                                            modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                                            modifier = Modifier.weight(1f).height(ActionBtnHeight),
+                                            shape = MaterialTheme.shapes.large
                                         ) { Text(if (joining) "Joining…" else "Join") }
                                     } else {
                                         OutlinedButton(
                                             onClick = {},
                                             enabled = false,
-                                            modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                                            modifier = Modifier.weight(1f).height(ActionBtnHeight),
+                                            shape = MaterialTheme.shapes.large
                                         ) { Text("Invite only") }
                                     }
                                 }
                             }
                         } else if (isHost) {
-                            OutlinedButton(
+                            // ✅ Cancel run (destructive)
+                            Button(
                                 onClick = { if (!ending && joinableNow) showCancelConfirm = true },
                                 enabled = !ending && joinableNow,
-                                modifier = Modifier.weight(1f).heightIn(min = 44.dp)
-                            ) { Text("Cancel run") }
+                                modifier = Modifier.weight(1f).height(ActionBtnHeight),
+                                shape = MaterialTheme.shapes.large,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            ) {
+                                Icon(Icons.Default.Block, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text(if (ending) "Cancelling…" else "Cancel run")
+                            }
                         } else {
                             OutlinedButton(
                                 onClick = {
@@ -443,10 +464,12 @@ fun RunDetailsScreen(
                                     }
                                 },
                                 enabled = !leaving,
-                                modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                                modifier = Modifier.weight(1f).height(ActionBtnHeight),
+                                shape = MaterialTheme.shapes.large
                             ) { Text(if (leaving) "Leaving…" else "Leave") }
                         }
 
+                        // ✅ Directions (outlined + icon)
                         OutlinedButton(
                             onClick = {
                                 val lat = courtLat
@@ -455,15 +478,32 @@ fun RunDetailsScreen(
                                 if (lat != null && lng != null) openDirections(ctx, lat, lng, name)
                             },
                             enabled = courtLat != null && courtLng != null,
-                            modifier = Modifier.weight(1f).heightIn(min = 44.dp)
-                        ) { Text("Directions") }
+                            modifier = Modifier.weight(1f).height(ActionBtnHeight),
+                            shape = MaterialTheme.shapes.large
+                        ) {
+                            Icon(Icons.Default.Navigation, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Directions")
+                        }
                     }
 
-                    if (isHost && ownedTeams.isNotEmpty() && joinableNow) {
-                        OutlinedButton(
+                    // ✅ Invite squad (tonal + icon) only if Invite Only
+                    val canInviteSquad =
+                        isHost &&
+                                accessEnum == RunAccess.INVITE_ONLY &&
+                                ownedTeams.isNotEmpty() &&
+                                joinableNow
+
+                    if (canInviteSquad) {
+                        FilledTonalButton(
                             onClick = { showSquadSheet = true },
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp)
-                        ) { Text("Invite squad") }
+                            modifier = Modifier.fillMaxWidth().height(ActionBtnHeight),
+                            shape = MaterialTheme.shapes.large
+                        ) {
+                            Icon(Icons.Default.GroupAdd, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Invite squad")
+                        }
                     }
 
                     // Players dropdown
@@ -524,8 +564,8 @@ fun RunDetailsScreen(
                         }
                     }
 
-                    // Pending dropdown (host-only)
-                    if (isHost) {
+                    // Pending dropdown (host-only, host-approval only)
+                    if (isHost && accessEnum == RunAccess.HOST_APPROVAL) {
                         ExpandableSectionCard(
                             title = "Pending requests",
                             countLabel = "${pendingRequests.size}",
@@ -560,7 +600,6 @@ fun RunDetailsScreen(
                                                             }.await()
                                                         } catch (e: Exception) {
                                                             Log.e("RunDetails", "approveJoin failed", e)
-                                                            // cleanup so it doesn't stick forever
                                                             try {
                                                                 db.runBatch { batch ->
                                                                     batch.update(runRef, "pendingJoinsCount", FieldValue.increment(-1))

@@ -74,7 +74,7 @@ class RunDetailsViewModel(
                 }
 
                 val run = snap.toObject(Run::class.java)
-                val hostId = snap.getString("hostId") ?: run?.hostId
+                val hostId = snap.getString("hostId") ?: snap.getString("hostUid") ?: run?.hostId
                 val isHost = hostId == uid
 
                 _uiState.value = _uiState.value.copy(

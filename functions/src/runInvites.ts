@@ -1,6 +1,6 @@
 // functions/src/runInvites.ts
 import * as admin from "firebase-admin";
-import { onDocumentCreated } from "firebase-functions/v2/firestore";
+import { onDocumentCreated, onDocumentUpdated } from "firebase-functions/v2/firestore";
 import { logger } from "firebase-functions";
 
 /**
@@ -65,16 +65,23 @@ export const createRunInvitesForNewRun = onDocumentCreated(
       // don’t send an invite to the host themselves
       if (!uid || uid === hostId) return;
 
-      const ref = db.collection("runInvites").doc();
-      batch.set(ref, {
-        inviteeUid: uid,
-        runId,
-        runName,
-        courtId,
-        courtName,
-        status: "pending",
-        createdAt: now,
-      });
+      // ✅ deterministic ID prevents duplicate spam across create + later invites
+      const ref = db.collection("runInvites").doc(`${runId}_${uid}`);
+
+      batch.set(
+        ref,
+        {
+          inviteeUid: uid,
+          runId,
+          runName,
+          courtId,
+          courtName,
+          status: "pending",
+          createdAt: now,
+        },
+        { merge: true } // if it exists, don't fail the batch
+      );
+
       count++;
     });
 
@@ -91,6 +98,94 @@ export const createRunInvitesForNewRun = onDocumentCreated(
       runId,
       count,
     });
+  }
+);
+
+/**
+ * ✅ NEW:
+ * When allowedUids changes on an existing run (RunDetailsScreen "Invite squad"),
+ * create runInvites only for the *newly added* uids.
+ */
+export const createRunInvitesOnAllowedUidsAdded = onDocumentUpdated(
+  "runs/{runId}",
+  async (event) => {
+    const before = event.data?.before?.data() as any;
+    const after = event.data?.after?.data() as any;
+    const runId = event.params.runId;
+
+    if (!before || !after) return;
+
+    const beforeAllowed = Array.isArray(before.allowedUids)
+      ? (before.allowedUids as string[])
+      : [];
+    const afterAllowed = Array.isArray(after.allowedUids)
+      ? (after.allowedUids as string[])
+      : [];
+
+    // Find newly-added uids
+    const beforeSet = new Set<string>(beforeAllowed);
+    const added = afterAllowed.filter((uid) => uid && !beforeSet.has(uid));
+
+    if (!added.length) {
+      // no new invites added
+      return;
+    }
+
+    const hostId =
+      (after.hostId as string | undefined) ??
+      (after.ownerUid as string | undefined) ??
+      "";
+
+    const runName = (after.name as string | undefined) ?? "Pickup run";
+    const courtId = (after.courtId as string | undefined) ?? "";
+
+    let courtName = (after.courtName as string | undefined) ?? "";
+    if (!courtName && courtId) {
+      try {
+        const courtSnap = await admin.firestore().collection("courts").doc(courtId).get();
+        courtName = (courtSnap.data()?.name as string | undefined) ?? "";
+      } catch (err) {
+        logger.warn("[createRunInvitesOnAllowedUidsAdded] failed to load court name", {
+          runId,
+          courtId,
+          err,
+        });
+      }
+    }
+
+    const db = admin.firestore();
+    const batch = db.batch();
+    const now = admin.firestore.FieldValue.serverTimestamp();
+
+    let count = 0;
+
+    for (const uid of added) {
+      if (!uid || uid === hostId) continue;
+
+      // ✅ deterministic ID so re-invites don't spam notifications
+      const ref = db.collection("runInvites").doc(`${runId}_${uid}`);
+
+      batch.set(
+        ref,
+        {
+          inviteeUid: uid,
+          runId,
+          runName,
+          courtId,
+          courtName,
+          status: "pending",
+          createdAt: now,
+        },
+        { merge: true }
+      );
+
+      count++;
+    }
+
+    if (!count) return;
+
+    await batch.commit();
+    logger.info("[createRunInvitesOnAllowedUidsAdded] created invites", { runId, count });
   }
 );
 
@@ -119,10 +214,8 @@ export const notifyRunInviteCreated = onDocumentCreated(
     }
 
     const runId = (invite.runId as string | undefined) ?? "";
-    const runName =
-      (invite.runName as string | undefined) ?? "Pickup run";
-    const courtName =
-      (invite.courtName as string | undefined) ?? "a court";
+    const runName = (invite.runName as string | undefined) ?? "Pickup run";
+    const courtName = (invite.courtName as string | undefined) ?? "a court";
 
     const db = admin.firestore();
     const tokensSnap = await db
@@ -146,10 +239,7 @@ export const notifyRunInviteCreated = onDocumentCreated(
 
     const msg: admin.messaging.MulticastMessage = {
       tokens,
-      notification: {
-        title,
-        body,
-      },
+      notification: { title, body },
       data: {
         type: "run_invite",
         inviteId,
@@ -176,3 +266,30 @@ export const notifyRunInviteCreated = onDocumentCreated(
     }
   }
 );
+
+export const deleteRunInvitesOnAllowedUidsRemoved = onDocumentUpdated(
+  "runs/{runId}",
+  async (event) => {
+    const before = event.data?.before?.data() as any;
+    const after  = event.data?.after?.data() as any;
+    const runId  = event.params.runId;
+    if (!before || !after) return;
+
+    const b = Array.isArray(before.allowedUids) ? before.allowedUids : [];
+    const a = Array.isArray(after.allowedUids)  ? after.allowedUids  : [];
+
+    const afterSet = new Set(a);
+    const removed = b.filter((uid: string) => uid && !afterSet.has(uid));
+    if (!removed.length) return;
+
+    const db = admin.firestore();
+    const batch = db.batch();
+    removed.forEach((uid: string) => {
+      batch.delete(db.collection("runInvites").doc(`${runId}_${uid}`));
+    });
+
+    await batch.commit();
+    logger.info("[deleteRunInvitesOnAllowedUidsRemoved] deleted", { runId, count: removed.length });
+  }
+);
+

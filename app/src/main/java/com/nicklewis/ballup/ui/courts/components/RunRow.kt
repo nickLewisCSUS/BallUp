@@ -17,14 +17,12 @@ import java.time.format.DateTimeFormatter
 fun RunRow(
     rr: RowRun,
     currentUid: String?,
-    onView: () -> Unit,
+    onView: (hidePlayers: Boolean) -> Unit,
     onJoin: () -> Unit,
     onRequestJoin: () -> Unit,
     onLeave: () -> Unit,
     hasPendingRequest: Boolean,
     onCancelRequest: () -> Unit,
-
-    // ✅ NEW: pass a nice label like username/displayName from CourtsListScreen
     hostLabel: String? = null
 ) {
     val zone = ZoneId.systemDefault()
@@ -40,13 +38,9 @@ fun RunRow(
 
     val openSlots = (rr.maxPlayers - rr.playerCount).coerceAtLeast(0)
 
-    // --- Decode access safely into enum ---
     val runAccess: RunAccess = remember(rr.access) {
-        try {
-            RunAccess.valueOf(rr.access)
-        } catch (e: IllegalArgumentException) {
-            RunAccess.OPEN
-        }
+        try { RunAccess.valueOf(rr.access) }
+        catch (_: IllegalArgumentException) { RunAccess.OPEN }
     }
 
     val isJoined = currentUid != null && rr.playerIds?.contains(currentUid) == true
@@ -55,14 +49,11 @@ fun RunRow(
             rr.hostId == currentUid || rr.hostUid == currentUid
             )
 
-    // Host is allowed to leave only if more than 1 player exists
     val hostCanLeave = isHost && rr.playerCount > 1
 
-    // Allow-list check (used for INVITE_ONLY and HOST_APPROVAL)
     val isAllowedByAllowList =
         currentUid != null && rr.allowedUids.contains(currentUid)
 
-    // Status pill text
     val status = when {
         runAccess == RunAccess.INVITE_ONLY && openSlots > 0 -> "Invite only"
         runAccess == RunAccess.HOST_APPROVAL && openSlots > 0 && !isAllowedByAllowList -> "Needs approval"
@@ -72,16 +63,18 @@ fun RunRow(
         else -> "Active"
     }
 
-    // ✅ Host label to display
-    val hostText = remember(hostLabel, rr.hostId, rr.hostUid) {
-        val nice = hostLabel?.trim().orEmpty()
-        when {
-            nice.isNotBlank() -> nice
-            !rr.hostId.isNullOrBlank() -> rr.hostId!!
-            !rr.hostUid.isNullOrBlank() -> rr.hostUid!!
-            else -> "Unknown"
-        }
+    // ✅ Only show: "You" (if host), else the provided username, else "Host".
+    val hostText = remember(isHost, hostLabel) {
+        if (isHost) "You"
+        else hostLabel?.trim()?.takeIf { it.isNotBlank() } ?: "Host"
     }
+
+    // ✅ View rules:
+    val canNonHostView = runAccess == RunAccess.OPEN || runAccess == RunAccess.HOST_APPROVAL
+    val canViewButton = isHost || canNonHostView
+
+    // ✅ If HOST_APPROVAL and user is not host -> hide players in details
+    val hidePlayersOnView = (!isHost && runAccess == RunAccess.HOST_APPROVAL)
 
     var showLeaveConfirm by remember { mutableStateOf(false) }
 
@@ -105,7 +98,6 @@ fun RunRow(
 
             Spacer(Modifier.height(2.dp))
 
-            // Time + count
             Text(
                 text = buildString {
                     if (timeLabel.isNotBlank()) append(timeLabel)
@@ -119,7 +111,6 @@ fun RunRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            // ✅ NEW: Host line
             Text(
                 text = "Host • $hostText",
                 style = MaterialTheme.typography.bodySmall,
@@ -136,12 +127,14 @@ fun RunRow(
                 verticalAlignment = Alignment.CenterVertically
             ) {
 
-                TextButton(onClick = onView) {
+                TextButton(
+                    enabled = canViewButton,
+                    onClick = { onView(hidePlayersOnView) }
+                ) {
                     Text(if (isHost) "Manage" else "View")
                 }
 
                 when {
-                    // --- Not joined yet: button depends on access ---
                     !isJoined -> {
                         when (runAccess) {
                             RunAccess.OPEN -> {
@@ -149,9 +142,7 @@ fun RunRow(
                                     onClick = onJoin,
                                     shape = MaterialTheme.shapes.medium,
                                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
-                                ) {
-                                    Text("Join", style = MaterialTheme.typography.labelLarge)
-                                }
+                                ) { Text("Join", style = MaterialTheme.typography.labelLarge) }
                             }
 
                             RunAccess.HOST_APPROVAL -> {
@@ -160,17 +151,13 @@ fun RunRow(
                                         onClick = onJoin,
                                         shape = MaterialTheme.shapes.medium,
                                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
-                                    ) {
-                                        Text("Join", style = MaterialTheme.typography.labelLarge)
-                                    }
+                                    ) { Text("Join", style = MaterialTheme.typography.labelLarge) }
                                 } else if (!hasPendingRequest) {
                                     FilledTonalButton(
                                         onClick = onRequestJoin,
                                         shape = MaterialTheme.shapes.medium,
                                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
-                                    ) {
-                                        Text("Request", style = MaterialTheme.typography.labelLarge)
-                                    }
+                                    ) { Text("Request", style = MaterialTheme.typography.labelLarge) }
                                 } else {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
@@ -181,9 +168,7 @@ fun RunRow(
                                             enabled = false,
                                             shape = MaterialTheme.shapes.medium,
                                             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
-                                        ) {
-                                            Text("Requested", style = MaterialTheme.typography.labelLarge)
-                                        }
+                                        ) { Text("Requested", style = MaterialTheme.typography.labelLarge) }
                                         TextButton(onClick = onCancelRequest) {
                                             Text("Undo", style = MaterialTheme.typography.labelSmall)
                                         }
@@ -197,59 +182,45 @@ fun RunRow(
                                         onClick = onJoin,
                                         shape = MaterialTheme.shapes.medium,
                                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
-                                    ) {
-                                        Text("Join", style = MaterialTheme.typography.labelLarge)
-                                    }
+                                    ) { Text("Join", style = MaterialTheme.typography.labelLarge) }
                                 } else {
                                     FilledTonalButton(
                                         onClick = { /* no-op */ },
                                         enabled = false,
                                         shape = MaterialTheme.shapes.medium,
                                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
-                                    ) {
-                                        Text("Invite only", style = MaterialTheme.typography.labelLarge)
-                                    }
+                                    ) { Text("Invite only", style = MaterialTheme.typography.labelLarge) }
                                 }
                             }
                         }
                     }
 
-                    // Host with multiple players → host-transfer confirm dialog
                     hostCanLeave -> {
                         OutlinedButton(
                             onClick = { showLeaveConfirm = true },
                             shape = MaterialTheme.shapes.medium,
                             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
-                        ) {
-                            Text("Leave", style = MaterialTheme.typography.labelLarge)
-                        }
+                        ) { Text("Leave", style = MaterialTheme.typography.labelLarge) }
                     }
 
-                    // Solo host → cannot leave (Manage button only)
                     isHost -> Unit
 
-                    // Normal player → confirm leave
                     else -> {
                         OutlinedButton(
                             onClick = { showLeaveConfirm = true },
                             shape = MaterialTheme.shapes.medium,
                             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
-                        ) {
-                            Text("Leave", style = MaterialTheme.typography.labelLarge)
-                        }
+                        ) { Text("Leave", style = MaterialTheme.typography.labelLarge) }
                     }
                 }
             }
         }
     }
 
-    // CONFIRMATION DIALOG (HOST + REGULAR)
     if (showLeaveConfirm) {
         AlertDialog(
             onDismissRequest = { showLeaveConfirm = false },
-            title = {
-                Text(if (hostCanLeave) "Leave run?" else "Confirm leave")
-            },
+            title = { Text(if (hostCanLeave) "Leave run?" else "Confirm leave") },
             text = {
                 Text(
                     if (hostCanLeave)
@@ -259,17 +230,13 @@ fun RunRow(
                 )
             },
             confirmButton = {
-                TextButton(
-                    onClick = {
-                        showLeaveConfirm = false
-                        onLeave()
-                    }
-                ) { Text("Leave") }
+                TextButton(onClick = {
+                    showLeaveConfirm = false
+                    onLeave()
+                }) { Text("Leave") }
             },
             dismissButton = {
-                TextButton(onClick = { showLeaveConfirm = false }) {
-                    Text("Cancel")
-                }
+                TextButton(onClick = { showLeaveConfirm = false }) { Text("Cancel") }
             }
         )
     }

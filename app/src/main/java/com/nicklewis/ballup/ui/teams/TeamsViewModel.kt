@@ -14,6 +14,16 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+// ---------- LIMITS ----------
+private const val MAX_OWNED_TEAMS = 3     // lead / in charge of
+private const val MAX_JOINED_TEAMS = 10   // total squads you're a member of (including ones you own)
+
+private fun TeamsUiState.ownedCount(): Int =
+    teams.count { it.ownerUid == currentUid }
+
+private fun TeamsUiState.joinedCount(): Int =
+    teams.size
+
 // ---------- UI STATE + VIEWMODEL ----------
 
 data class TeamsUiState(
@@ -21,7 +31,7 @@ data class TeamsUiState(
     val teams: List<Team> = emptyList(),              // squads I’m in
     val discoverableTeams: List<Team> = emptyList(),  // squads I can request
     val pendingJoinTeamIds: Set<String> = emptySet(), // teams I’ve requested to join
-    val incomingInvites: List<TeamsRepository.TeamInviteForUser> = emptyList(), // NEW
+    val incomingInvites: List<TeamsRepository.TeamInviteForUser> = emptyList(),
     val errorMessage: String? = null,
     val currentUid: String = ""
 )
@@ -89,7 +99,27 @@ class TeamsViewModel(
         onDone: (Boolean, String?) -> Unit
     ) {
         viewModelScope.launch {
+            val s = uiState.value
+            val owned = s.ownedCount()
+            val joined = s.joinedCount()
+
+            if (owned >= MAX_OWNED_TEAMS) {
+                onDone(
+                    false,
+                    "You can only own $MAX_OWNED_TEAMS squads. Delete one to create another."
+                )
+                return@launch
+            }
+            if (joined >= MAX_JOINED_TEAMS) {
+                onDone(
+                    false,
+                    "You can only be in $MAX_JOINED_TEAMS squads. Leave one to create another."
+                )
+                return@launch
+            }
+
             try {
+                // NOTE: for true enforcement, also enforce in repository (transaction/rules)
                 repo.createTeam(name.trim(), preferredSkillLevel, playDays, inviteOnly)
                 onDone(true, null)
             } catch (e: Exception) {
@@ -166,7 +196,19 @@ class TeamsViewModel(
             onDone(false, "Not signed in")
             return
         }
+
         viewModelScope.launch {
+            val s = uiState.value
+            val joined = s.joinedCount()
+
+            if (joined >= MAX_JOINED_TEAMS) {
+                onDone(
+                    false,
+                    "You can only be in $MAX_JOINED_TEAMS squads. Leave one to join another."
+                )
+                return@launch
+            }
+
             try {
                 repo.requestToJoinTeam(teamId, uid)
                 _uiState.update {
@@ -233,6 +275,7 @@ class TeamsViewModel(
     fun approveJoin(teamId: String, uid: String, onDone: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
             try {
+                // NOTE: the joining player's limit should be enforced server-side / repo-side.
                 repo.approveJoinRequest(teamId, uid)
                 onDone(true, null)
             } catch (e: Exception) {
@@ -271,7 +314,19 @@ class TeamsViewModel(
 
     fun acceptInvite(inviteId: String, onDone: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
+            val s = uiState.value
+            val joined = s.joinedCount()
+
+            if (joined >= MAX_JOINED_TEAMS) {
+                onDone(
+                    false,
+                    "You can only be in $MAX_JOINED_TEAMS squads. Leave one to accept this invite."
+                )
+                return@launch
+            }
+
             try {
+                // NOTE: for true enforcement, also enforce in repository (transaction/rules)
                 repo.acceptInvite(inviteId)
                 onDone(true, null)
             } catch (e: Exception) {

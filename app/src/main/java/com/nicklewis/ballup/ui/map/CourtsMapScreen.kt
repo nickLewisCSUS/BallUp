@@ -1,4 +1,5 @@
-@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+// ui/map/CourtsMapScreen.kt
+@file:OptIn(ExperimentalMaterial3Api::class)
 
 package com.nicklewis.ballup.ui.map
 
@@ -6,11 +7,29 @@ import android.Manifest
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -31,12 +50,13 @@ import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.ktx.toObject
 import com.nicklewis.ballup.model.Court
 import com.nicklewis.ballup.model.Run
-import com.nicklewis.ballup.ui.runs.StartRunDialog
 import com.nicklewis.ballup.ui.runs.RunsViewModel
+import com.nicklewis.ballup.ui.runs.StartRunDialog
 import com.nicklewis.ballup.util.centerOnLastKnown
 import com.nicklewis.ballup.util.enableMyLocation
 import com.nicklewis.ballup.util.hasLocationPermission
 import com.nicklewis.ballup.vm.StarsViewModel
+import kotlinx.coroutines.tasks.await
 
 @Composable
 fun CourtsMapScreen(
@@ -52,6 +72,7 @@ fun CourtsMapScreen(
     var runs by remember { mutableStateOf(listOf<Pair<String, Run>>()) }
     var error by remember { mutableStateOf<String?>(null) }
 
+    // ✅ username-only cache
     val userNames = remember { mutableStateMapOf<String, String>() }
 
     val cam: MapCameraVM = viewModel()
@@ -71,8 +92,8 @@ fun CourtsMapScreen(
     var showCreate by remember { mutableStateOf<String?>(null) }
     var dialogError by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(Unit) {
-        db.collection("courts")
+    DisposableEffect(Unit) {
+        val courtsReg = db.collection("courts")
             .orderBy("name", Query.Direction.ASCENDING)
             .addSnapshotListener { snap, e ->
                 if (e != null) {
@@ -83,11 +104,8 @@ fun CourtsMapScreen(
                     ?.map { d -> d.id to (d.toObject<Court>() ?: Court()) }
                     .orEmpty()
             }
-    }
 
-    // ✅ UPDATED: listen to active + scheduled (not cancelled)
-    LaunchedEffect(Unit) {
-        db.collection("runs")
+        val runsReg = db.collection("runs")
             .whereIn("status", listOf("active", "scheduled"))
             .addSnapshotListener { snap, e ->
                 if (e != null) {
@@ -98,8 +116,14 @@ fun CourtsMapScreen(
                     ?.map { d -> d.id to (d.toObject(Run::class.java) ?: Run()) }
                     .orEmpty()
             }
+
+        onDispose {
+            courtsReg.remove()
+            runsReg.remove()
+        }
     }
 
+    // ✅ username-only fetch (NO displayName)
     LaunchedEffect(runs) {
         val ids = mutableSetOf<String>()
         runs.forEach { (_, run) ->
@@ -108,20 +132,16 @@ fun CourtsMapScreen(
         }
 
         ids.forEach { uid ->
-            if (!userNames.containsKey(uid)) {
-                db.collection("users").document(uid).get()
-                    .addOnSuccessListener { snap ->
-                        val name = snap.getString("username")
-                            ?: snap.getString("displayName")
-                            ?: uid.takeLast(6)
-                        userNames[uid] = name
-                    }
-                    .addOnFailureListener { e ->
-                        Log.e("Map", "Failed to load user profile for $uid", e)
-                        if (!userNames.containsKey(uid)) {
-                            userNames[uid] = uid.takeLast(6)
-                        }
-                    }
+            if (userNames.containsKey(uid)) return@forEach
+            try {
+                val snap = db.collection("users").document(uid).get().await()
+                val username = snap.getString("username").orEmpty().trim()
+
+                // if username missing, don't leak UID / google name
+                userNames[uid] = if (username.isNotBlank()) username else "Host"
+            } catch (e: Exception) {
+                Log.e("Map", "Failed to load user profile for $uid", e)
+                userNames.putIfAbsent(uid, "Host")
             }
         }
     }
@@ -137,6 +157,7 @@ fun CourtsMapScreen(
     ) { grants ->
         val granted = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
                 grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+
         if (granted) {
             gmap?.let { map ->
                 enableMyLocation(map, context)
@@ -175,12 +196,10 @@ fun CourtsMapScreen(
                     }
 
                     if (hasLocationPermission(context)) enableMyLocation(m, context)
+
                     if (savedCenter != null && savedZoom != null) {
                         m.moveCamera(
-                            CameraUpdateFactory.newLatLngZoom(
-                                savedCenter!!,
-                                savedZoom!!
-                            )
+                            CameraUpdateFactory.newLatLngZoom(savedCenter!!, savedZoom!!)
                         )
                     } else if (hasLocationPermission(context)) {
                         centerOnLastKnown(m, fused, context)
@@ -191,6 +210,7 @@ fun CourtsMapScreen(
                             com.google.android.gms.maps.GoogleMap.OnCameraMoveStartedListener.REASON_GESTURE
                         ) userMoved = true
                     }
+
                     m.setOnCameraIdleListener {
                         val pos = m.cameraPosition
                         savedCenter = pos.target
@@ -297,7 +317,6 @@ fun CourtsMapScreen(
 
                     val startMs = run.startsAt?.toDate()?.time ?: return@any false
                     val endMs = run.endsAt?.toDate()?.time ?: startMs
-
                     nowMs in startMs..endMs
                 }
 
@@ -321,6 +340,7 @@ fun CourtsMapScreen(
         }
 
         if (savedCenter != null && savedZoom != null) return@LaunchedEffect
+
         if (points.isEmpty()) {
             val sac = LatLng(38.5816, -121.4944)
             map.moveCamera(CameraUpdateFactory.newLatLngZoom(sac, 12f))
@@ -330,9 +350,9 @@ fun CourtsMapScreen(
 
         if (!didAutoFit && !userMoved) {
             map.setOnMapLoadedCallback {
-                if (points.size == 1)
+                if (points.size == 1) {
                     map.animateCamera(CameraUpdateFactory.newLatLngZoom(points.first(), 15f))
-                else {
+                } else {
                     val b = com.google.android.gms.maps.model.LatLngBounds.Builder()
                     points.forEach(b::include)
                     map.animateCamera(CameraUpdateFactory.newLatLngBounds(b.build(), 150))
@@ -349,7 +369,9 @@ fun CourtsMapScreen(
             userNames = userNames,
             starredIds = starredIds,
             starsVm = starsVm,
-            onOpenRunDetails = onOpenRunDetails,
+            onOpenRunDetails = { runId, _ ->
+                onOpenRunDetails(runId)
+            },
             onDismiss = { selected = null },
             onStartRunHere = { courtId ->
                 dialogError = null
@@ -399,6 +421,7 @@ private fun rememberMapViewWithLifecycle(): MapView {
     val context = LocalContext.current
     val mapView = remember { MapView(context) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
+
     DisposableEffect(lifecycle, mapView) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {

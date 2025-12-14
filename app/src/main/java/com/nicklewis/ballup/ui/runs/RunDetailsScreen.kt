@@ -36,6 +36,7 @@ private val ActionBtnHeight = 48.dp
 @Composable
 fun RunDetailsScreen(
     runId: String,
+    hidePlayers: Boolean = false,
     onBack: (() -> Unit)? = null,
     viewModel: RunDetailsViewModel
 ) {
@@ -133,7 +134,8 @@ fun RunDetailsScreen(
                         return@addSnapshotListener
                     }
                     myRequestStatus =
-                        if (snap != null && snap.exists()) (snap.data?.get("status") as? String ?: "pending")
+                        if (snap != null && snap.exists()) (snap.data?.get("status") as? String
+                            ?: "pending")
                         else null
                 }
             onDispose { reg.remove() }
@@ -279,7 +281,11 @@ fun RunDetailsScreen(
                     }
 
                     val accessEnum: RunAccess = remember(r.access) {
-                        try { RunAccess.valueOf(r.access) } catch (_: IllegalArgumentException) { RunAccess.OPEN }
+                        try {
+                            RunAccess.valueOf(r.access)
+                        } catch (_: IllegalArgumentException) {
+                            RunAccess.OPEN
+                        }
                     }
 
                     val accessLabel = when (accessEnum) {
@@ -294,7 +300,10 @@ fun RunDetailsScreen(
 
                     // Header / summary card (compact)
                     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(
+                            Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                             Text(
                                 text = r.name?.ifBlank { "Pickup Run" } ?: "Pickup Run",
                                 style = MaterialTheme.typography.titleLarge,
@@ -361,9 +370,13 @@ fun RunDetailsScreen(
                                             if (!canJoin) return@Button
                                             joining = true
                                             scope.launch {
-                                                try { joinRun(db, runId, uid!!) }
-                                                catch (e: Exception) { Log.e("RunDetails", "joinRun failed", e) }
-                                                finally { joining = false }
+                                                try {
+                                                    joinRun(db, runId, uid!!)
+                                                } catch (e: Exception) {
+                                                    Log.e("RunDetails", "joinRun failed", e)
+                                                } finally {
+                                                    joining = false
+                                                }
                                             }
                                         },
                                         enabled = canJoin && !joining,
@@ -378,7 +391,8 @@ fun RunDetailsScreen(
                                             OutlinedButton(
                                                 onClick = {},
                                                 enabled = false,
-                                                modifier = Modifier.weight(1f).height(ActionBtnHeight),
+                                                modifier = Modifier.weight(1f)
+                                                    .height(ActionBtnHeight),
                                                 shape = MaterialTheme.shapes.large
                                             ) { Text("Request") }
                                         }
@@ -387,7 +401,8 @@ fun RunDetailsScreen(
                                             OutlinedButton(
                                                 onClick = {},
                                                 enabled = false,
-                                                modifier = Modifier.weight(1f).height(ActionBtnHeight),
+                                                modifier = Modifier.weight(1f)
+                                                    .height(ActionBtnHeight),
                                                 shape = MaterialTheme.shapes.large
                                             ) { Text("Request sent") }
                                         }
@@ -397,13 +412,22 @@ fun RunDetailsScreen(
                                                 onClick = {
                                                     requesting = true
                                                     scope.launch {
-                                                        try { requestJoinRun(db, runId, uid!!) }
-                                                        catch (e: Exception) { Log.e("RunDetails", "requestJoinRun failed", e) }
-                                                        finally { requesting = false }
+                                                        try {
+                                                            requestJoinRun(db, runId, uid!!)
+                                                        } catch (e: Exception) {
+                                                            Log.e(
+                                                                "RunDetails",
+                                                                "requestJoinRun failed",
+                                                                e
+                                                            )
+                                                        } finally {
+                                                            requesting = false
+                                                        }
                                                     }
                                                 },
                                                 enabled = !requesting,
-                                                modifier = Modifier.weight(1f).height(ActionBtnHeight),
+                                                modifier = Modifier.weight(1f)
+                                                    .height(ActionBtnHeight),
                                                 shape = MaterialTheme.shapes.large
                                             ) { Text(if (requesting) "Requesting…" else "Request") }
                                         }
@@ -417,9 +441,13 @@ fun RunDetailsScreen(
                                             onClick = {
                                                 joining = true
                                                 scope.launch {
-                                                    try { joinRun(db, runId, uid!!) }
-                                                    catch (e: Exception) { Log.e("RunDetails", "joinRun failed", e) }
-                                                    finally { joining = false }
+                                                    try {
+                                                        joinRun(db, runId, uid!!)
+                                                    } catch (e: Exception) {
+                                                        Log.e("RunDetails", "joinRun failed", e)
+                                                    } finally {
+                                                        joining = false
+                                                    }
                                                 }
                                             },
                                             enabled = !joining,
@@ -458,9 +486,13 @@ fun RunDetailsScreen(
                                     if (uid == null) return@OutlinedButton
                                     leaving = true
                                     scope.launch {
-                                        try { leaveRun(db, runId, uid) }
-                                        catch (e: Exception) { Log.e("RunDetails", "leaveRun failed", e) }
-                                        finally { leaving = false }
+                                        try {
+                                            leaveRun(db, runId, uid)
+                                        } catch (e: Exception) {
+                                            Log.e("RunDetails", "leaveRun failed", e)
+                                        } finally {
+                                            leaving = false
+                                        }
                                     }
                                 },
                                 enabled = !leaving,
@@ -513,213 +545,304 @@ fun RunDetailsScreen(
                             { pid -> playerProfiles[pid]?.username ?: "" }
                         )
                     )
-                    ExpandableSectionCard(
-                        title = "Players",
-                        countLabel = "${r.playerCount}/${r.maxPlayers}",
-                        initiallyExpanded = true
-                    ) {
-                        if (sortedPlayerIds.isEmpty()) {
-                            EmptyHint("No players yet.")
-                        } else {
-                            sortedPlayerIds.forEach { pid ->
-                                val p = playerProfiles[pid]
-                                val isRowHost = pid == hostUidForSort
-                                val tags = listOfNotNull(p?.skillLevel, p?.playStyle, p?.heightBracket)
-                                PlayerRow(username = (p?.username ?: pid), tags = tags, isHost = isRowHost)
+                    val shouldHidePlayersList = hidePlayers && !isHost
+
+                    if (shouldHidePlayersList) {
+                        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                            Column(
+                                Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text("Players", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "Players are hidden until the host approves you.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
-                    }
-
-                    // Invites dropdown (host-only, invite-only)
-                    if (isHost && accessEnum == RunAccess.INVITE_ONLY) {
+                    } else {
+                        // your existing ExpandableSectionCard Players block (unchanged)
                         ExpandableSectionCard(
-                            title = "Invited",
-                            countLabel = "${r.allowedUids.size}",
-                            initiallyExpanded = false,
-                            trailing = {
-                                TextButton(onClick = { showInviteDialog = true }) { Text("Invite") }
-                            }
+                            title = "Players",
+                            countLabel = "${r.playerCount}/${r.maxPlayers}",
+                            initiallyExpanded = true
                         ) {
-                            if (r.allowedUids.isEmpty()) {
-                                EmptyHint("No invited players yet.")
+                            if (sortedPlayerIds.isEmpty()) {
+                                EmptyHint("No players yet.")
                             } else {
-                                r.allowedUids.forEach { invitedUid ->
-                                    val p = invitedProfiles[invitedUid]
-                                    val tags = listOfNotNull(p?.skillLevel, p?.playStyle, p?.heightBracket)
-                                    InvitedRow(
-                                        username = p?.username ?: invitedUid,
+                                sortedPlayerIds.forEach { pid ->
+                                    val p = playerProfiles[pid]
+                                    val isRowHost = pid == hostUidForSort
+                                    val tags =
+                                        listOfNotNull(p?.skillLevel, p?.playStyle, p?.heightBracket)
+                                    PlayerRow(
+                                        username = (p?.username ?: pid),
                                         tags = tags,
-                                        onRemove = {
-                                            scope.launch {
-                                                try {
-                                                    r.ref.update("allowedUids", FieldValue.arrayRemove(invitedUid)).await()
-                                                } catch (e: Exception) {
-                                                    Log.e("RunDetails", "remove invite failed", e)
-                                                }
-                                            }
-                                        }
+                                        isHost = isRowHost
                                     )
                                 }
                             }
                         }
-                    }
 
-                    // Pending dropdown (host-only, host-approval only)
-                    if (isHost && accessEnum == RunAccess.HOST_APPROVAL) {
-                        ExpandableSectionCard(
-                            title = "Pending requests",
-                            countLabel = "${pendingRequests.size}",
-                            initiallyExpanded = pendingRequests.isNotEmpty()
-                        ) {
-                            if (pendingRequests.isEmpty()) {
-                                EmptyHint("No pending join requests.")
-                            } else {
-                                pendingRequests
-                                    .sortedBy { it.createdAt?.toDate()?.time ?: Long.MAX_VALUE }
-                                    .forEach { req ->
-                                        val p = pendingProfiles[req.uid]
-                                        val tags = listOfNotNull(p?.skillLevel, p?.playStyle, p?.heightBracket)
-                                        var rowBusy by remember(req.uid) { mutableStateOf(false) }
-
-                                        PendingRequestRow(
-                                            username = p?.username ?: req.uid,
+                        // Invites dropdown (host-only, invite-only)
+                        if (isHost && accessEnum == RunAccess.INVITE_ONLY) {
+                            ExpandableSectionCard(
+                                title = "Invited",
+                                countLabel = "${r.allowedUids.size}",
+                                initiallyExpanded = false,
+                                trailing = {
+                                    TextButton(onClick = {
+                                        showInviteDialog = true
+                                    }) { Text("Invite") }
+                                }
+                            ) {
+                                if (r.allowedUids.isEmpty()) {
+                                    EmptyHint("No invited players yet.")
+                                } else {
+                                    r.allowedUids.forEach { invitedUid ->
+                                        val p = invitedProfiles[invitedUid]
+                                        val tags = listOfNotNull(
+                                            p?.skillLevel,
+                                            p?.playStyle,
+                                            p?.heightBracket
+                                        )
+                                        InvitedRow(
+                                            username = p?.username ?: invitedUid,
                                             tags = tags,
-                                            busy = rowBusy,
-                                            onApprove = {
-                                                if (rowBusy) return@PendingRequestRow
-                                                rowBusy = true
+                                            onRemove = {
                                                 scope.launch {
                                                     try {
-                                                        val runRef = db.collection("runs").document(runId)
-                                                        val reqRef = req.ref
-                                                        try {
-                                                            joinRun(db, runId, req.uid)
-                                                            db.runBatch { batch ->
-                                                                batch.update(runRef, "pendingJoinsCount", FieldValue.increment(-1))
-                                                                batch.update(reqRef, mapOf("status" to "approved", "approvedAt" to FieldValue.serverTimestamp()))
-                                                            }.await()
-                                                        } catch (e: Exception) {
-                                                            Log.e("RunDetails", "approveJoin failed", e)
-                                                            try {
-                                                                db.runBatch { batch ->
-                                                                    batch.update(runRef, "pendingJoinsCount", FieldValue.increment(-1))
-                                                                    batch.update(reqRef, mapOf("status" to "denied", "decidedAt" to FieldValue.serverTimestamp()))
-                                                                }.await()
-                                                            } catch (inner: Exception) {
-                                                                Log.e("RunDetails", "cleanup after approve failure", inner)
-                                                            }
-                                                        }
-                                                    } finally {
-                                                        rowBusy = false
-                                                    }
-                                                }
-                                            },
-                                            onDeny = {
-                                                if (rowBusy) return@PendingRequestRow
-                                                rowBusy = true
-                                                scope.launch {
-                                                    try {
-                                                        val runRef = db.collection("runs").document(runId)
-                                                        val reqRef = req.ref
-                                                        db.runBatch { batch ->
-                                                            batch.update(runRef, "pendingJoinsCount", FieldValue.increment(-1))
-                                                            batch.update(reqRef, mapOf("status" to "denied", "decidedAt" to FieldValue.serverTimestamp()))
-                                                        }.await()
+                                                        r.ref.update(
+                                                            "allowedUids",
+                                                            FieldValue.arrayRemove(invitedUid)
+                                                        ).await()
                                                     } catch (e: Exception) {
-                                                        Log.e("RunDetails", "denyJoin failed", e)
-                                                    } finally {
-                                                        rowBusy = false
+                                                        Log.e(
+                                                            "RunDetails",
+                                                            "remove invite failed",
+                                                            e
+                                                        )
                                                     }
                                                 }
                                             }
                                         )
                                     }
-                            }
-                        }
-                    }
-
-                    // Cancel confirmation dialog
-                    if (showCancelConfirm) {
-                        AlertDialog(
-                            onDismissRequest = { if (!ending) showCancelConfirm = false },
-                            title = { Text("Cancel run?") },
-                            text = { Text("This will cancel the run for everyone.") },
-                            confirmButton = {
-                                TextButton(
-                                    onClick = {
-                                        if (ending) return@TextButton
-                                        ending = true
-                                        scope.launch {
-                                            try {
-                                                r.ref.update(
-                                                    mapOf(
-                                                        "status" to "cancelled",
-                                                        "lastHeartbeatAt" to FieldValue.serverTimestamp()
-                                                    )
-                                                ).await()
-                                                showCancelConfirm = false
-                                                onBack?.invoke()
-                                            } catch (e: Exception) {
-                                                Log.e("RunDetails", "cancelRun failed", e)
-                                                error = "Failed to cancel run."
-                                            } finally {
-                                                ending = false
-                                            }
-                                        }
-                                    }
-                                ) { Text(if (ending) "Cancelling…" else "Yes, cancel") }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = { if (!ending) showCancelConfirm = false }) { Text("Keep run") }
-                            }
-                        )
-                    }
-
-                    if (showEdit) {
-                        EditRunSheet(
-                            run = r,
-                            onDismiss = { showEdit = false },
-                            onSave = { patch ->
-                                scope.launch {
-                                    try { r.ref.update(patch).await() }
-                                    catch (e: Exception) { Log.e("RunDetails", "update failed", e) }
-                                    finally { showEdit = false }
                                 }
                             }
-                        )
+                        }
+
+                        // Pending dropdown (host-only, host-approval only)
+                        if (isHost && accessEnum == RunAccess.HOST_APPROVAL) {
+                            ExpandableSectionCard(
+                                title = "Pending requests",
+                                countLabel = "${pendingRequests.size}",
+                                initiallyExpanded = pendingRequests.isNotEmpty()
+                            ) {
+                                if (pendingRequests.isEmpty()) {
+                                    EmptyHint("No pending join requests.")
+                                } else {
+                                    pendingRequests
+                                        .sortedBy { it.createdAt?.toDate()?.time ?: Long.MAX_VALUE }
+                                        .forEach { req ->
+                                            val p = pendingProfiles[req.uid]
+                                            val tags = listOfNotNull(
+                                                p?.skillLevel,
+                                                p?.playStyle,
+                                                p?.heightBracket
+                                            )
+                                            var rowBusy by remember(req.uid) { mutableStateOf(false) }
+
+                                            PendingRequestRow(
+                                                username = p?.username ?: req.uid,
+                                                tags = tags,
+                                                busy = rowBusy,
+                                                onApprove = {
+                                                    if (rowBusy) return@PendingRequestRow
+                                                    rowBusy = true
+                                                    scope.launch {
+                                                        try {
+                                                            val runRef = db.collection("runs")
+                                                                .document(runId)
+                                                            val reqRef = req.ref
+                                                            try {
+                                                                joinRun(db, runId, req.uid)
+                                                                db.runBatch { batch ->
+                                                                    batch.update(
+                                                                        runRef,
+                                                                        "pendingJoinsCount",
+                                                                        FieldValue.increment(-1)
+                                                                    )
+                                                                    batch.update(
+                                                                        reqRef,
+                                                                        mapOf(
+                                                                            "status" to "approved",
+                                                                            "approvedAt" to FieldValue.serverTimestamp()
+                                                                        )
+                                                                    )
+                                                                }.await()
+                                                            } catch (e: Exception) {
+                                                                Log.e(
+                                                                    "RunDetails",
+                                                                    "approveJoin failed",
+                                                                    e
+                                                                )
+                                                                try {
+                                                                    db.runBatch { batch ->
+                                                                        batch.update(
+                                                                            runRef,
+                                                                            "pendingJoinsCount",
+                                                                            FieldValue.increment(-1)
+                                                                        )
+                                                                        batch.update(
+                                                                            reqRef,
+                                                                            mapOf(
+                                                                                "status" to "denied",
+                                                                                "decidedAt" to FieldValue.serverTimestamp()
+                                                                            )
+                                                                        )
+                                                                    }.await()
+                                                                } catch (inner: Exception) {
+                                                                    Log.e(
+                                                                        "RunDetails",
+                                                                        "cleanup after approve failure",
+                                                                        inner
+                                                                    )
+                                                                }
+                                                            }
+                                                        } finally {
+                                                            rowBusy = false
+                                                        }
+                                                    }
+                                                },
+                                                onDeny = {
+                                                    if (rowBusy) return@PendingRequestRow
+                                                    rowBusy = true
+                                                    scope.launch {
+                                                        try {
+                                                            val runRef = db.collection("runs")
+                                                                .document(runId)
+                                                            val reqRef = req.ref
+                                                            db.runBatch { batch ->
+                                                                batch.update(
+                                                                    runRef,
+                                                                    "pendingJoinsCount",
+                                                                    FieldValue.increment(-1)
+                                                                )
+                                                                batch.update(
+                                                                    reqRef,
+                                                                    mapOf(
+                                                                        "status" to "denied",
+                                                                        "decidedAt" to FieldValue.serverTimestamp()
+                                                                    )
+                                                                )
+                                                            }.await()
+                                                        } catch (e: Exception) {
+                                                            Log.e(
+                                                                "RunDetails",
+                                                                "denyJoin failed",
+                                                                e
+                                                            )
+                                                        } finally {
+                                                            rowBusy = false
+                                                        }
+                                                    }
+                                                }
+                                            )
+                                        }
+                                }
+                            }
+                        }
+
+                        // Cancel confirmation dialog
+                        if (showCancelConfirm) {
+                            AlertDialog(
+                                onDismissRequest = { if (!ending) showCancelConfirm = false },
+                                title = { Text("Cancel run?") },
+                                text = { Text("This will cancel the run for everyone.") },
+                                confirmButton = {
+                                    TextButton(
+                                        onClick = {
+                                            if (ending) return@TextButton
+                                            ending = true
+                                            scope.launch {
+                                                try {
+                                                    r.ref.update(
+                                                        mapOf(
+                                                            "status" to "cancelled",
+                                                            "lastHeartbeatAt" to FieldValue.serverTimestamp()
+                                                        )
+                                                    ).await()
+                                                    showCancelConfirm = false
+                                                    onBack?.invoke()
+                                                } catch (e: Exception) {
+                                                    Log.e("RunDetails", "cancelRun failed", e)
+                                                    error = "Failed to cancel run."
+                                                } finally {
+                                                    ending = false
+                                                }
+                                            }
+                                        }
+                                    ) { Text(if (ending) "Cancelling…" else "Yes, cancel") }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = {
+                                        if (!ending) showCancelConfirm = false
+                                    }) { Text("Keep run") }
+                                }
+                            )
+                        }
+
+                        if (showEdit) {
+                            EditRunSheet(
+                                run = r,
+                                onDismiss = { showEdit = false },
+                                onSave = { patch ->
+                                    scope.launch {
+                                        try {
+                                            r.ref.update(patch).await()
+                                        } catch (e: Exception) {
+                                            Log.e("RunDetails", "update failed", e)
+                                        } finally {
+                                            showEdit = false
+                                        }
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
             }
         }
-    }
 
-    // invite dialog (host only, invite-only)
-    InvitePlayerDialog(
-        visible = showInviteDialog,
-        run = run,
-        uid = uid,
-        db = FirebaseFirestore.getInstance(),
-        onDismiss = { showInviteDialog = false }
-    )
-
-    // squad sheet
-    if (showSquadSheet) {
-        SquadInviteSheet(
-            ownedTeams = ownedTeams,
-            errorText = squadError,
-            onDismiss = { showSquadSheet = false },
-            onInviteTeam = { team: Team ->
-                val r = run ?: return@SquadInviteSheet
-                scope.launch {
-                    try {
-                        viewModel.inviteSquad(team)
-                        showSquadSheet = false
-                    } catch (_: Exception) {
-                        // viewModel handles errorMessage
-                    }
-                }
-            },
-            onClearError = { viewModel.clearError() }
+        // invite dialog (host only, invite-only)
+        InvitePlayerDialog(
+            visible = showInviteDialog,
+            run = run,
+            uid = uid,
+            db = FirebaseFirestore.getInstance(),
+            onDismiss = { showInviteDialog = false }
         )
+
+        // squad sheet
+        if (showSquadSheet) {
+            SquadInviteSheet(
+                ownedTeams = ownedTeams,
+                errorText = squadError,
+                onDismiss = { showSquadSheet = false },
+                onInviteTeam = { team: Team ->
+                    val r = run ?: return@SquadInviteSheet
+                    scope.launch {
+                        try {
+                            viewModel.inviteSquad(team)
+                            showSquadSheet = false
+                        } catch (_: Exception) {
+                            // viewModel handles errorMessage
+                        }
+                    }
+                },
+                onClearError = { viewModel.clearError() }
+            )
+        }
     }
 }

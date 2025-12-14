@@ -163,7 +163,6 @@ fun CourtsListScreen(
         }
     }
 
-    // ✅ host uid -> label cache (username/displayName)
     val hostLabels = remember { mutableStateMapOf<String, String>() }
 
 // ✅ Fetch host labels for runs currently visible (cheap + cached)
@@ -172,12 +171,13 @@ fun CourtsListScreen(
             val hostUids: List<String> = visibleRows
                 .flatMap { row -> row.runsForCard }
                 .mapNotNull { rr ->
-                    val h = (rr.hostUid ?: rr.hostId)?.trim()
-                    h?.takeIf { it.isNotBlank() }
+                    // ✅ IMPORTANT: blank hostUid should not block fallback
+                    rr.hostUid?.trim()?.takeIf { it.isNotBlank() }
+                        ?: rr.hostId?.trim()?.takeIf { it.isNotBlank() }
                 }
                 .distinct()
 
-            val toFetch = hostUids.filter { uid -> !hostLabels.containsKey(uid) }
+            val toFetch = hostUids.filter { u -> !hostLabels.containsKey(u) }
             if (toFetch.isEmpty()) return@LaunchedEffect
 
             toFetch.forEach { hostUid ->
@@ -186,15 +186,17 @@ fun CourtsListScreen(
                     val username = doc.getString("username")
                     val displayName = doc.getString("displayName")
 
+                    // ✅ Prefer username over displayName (avoid Google name)
                     val label = when {
-                        !displayName.isNullOrBlank() -> displayName
                         !username.isNullOrBlank() -> username
-                        else -> hostUid
+                        !displayName.isNullOrBlank() -> displayName
+                        else -> "Host" // ✅ never show raw uid
                     }
+
                     hostLabels[hostUid] = label
                 } catch (e: Exception) {
                     Log.w("CourtsList", "Failed to load host label for $hostUid", e)
-                    hostLabels[hostUid] = hostUid
+                    hostLabels[hostUid] = "Host"
                 }
             }
         } catch (e: Exception) {
@@ -423,8 +425,9 @@ fun CourtsListScreen(
                             hasPendingRequestForRun = { runId ->
                                 pendingRequests[runId] == true
                             },
-                            onViewRun = { runId ->
-                                AppNavControllerHolder.navController?.navigate("run/$runId") {
+                            onViewRun = { runId, hidePlayers ->
+                                val suffix = if (hidePlayers) "?hidePlayers=1" else ""
+                                AppNavControllerHolder.navController?.navigate("run/$runId$suffix") {
                                     launchSingleTop = true
                                     restoreState = true
                                 }

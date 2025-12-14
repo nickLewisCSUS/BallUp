@@ -4,6 +4,8 @@ package com.nicklewis.ballup.ui.teams
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,8 +14,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -21,10 +21,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -37,7 +41,6 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -47,21 +50,23 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.nicklewis.ballup.data.TeamsRepository.PendingTeamRequest
 import com.nicklewis.ballup.model.Team
 import com.nicklewis.ballup.model.UserProfile
 import kotlinx.coroutines.launch
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
+
+// ---------- LIMITS ----------
+private const val MAX_OWNED_TEAMS = 3
+private const val MAX_JOINED_TEAMS = 10
 
 // ---------- SCREEN ----------
-
 @Composable
 fun TeamsScreen(
     onBackToMap: () -> Unit,      // kept for nav wiring, but no longer used
-    onOpenSettings: () -> Unit,  // kept for nav wiring, but no longer used
+    onOpenSettings: () -> Unit,   // kept for nav wiring, but no longer used
     viewModel: TeamsViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -132,15 +137,35 @@ fun TeamsScreen(
     val skillOptions = listOf("Any", "Casual runs", "Run it back", "Tryhard / league")
     val dayOptions = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
+    // ---- limits computed from state ----
+    val ownedCount = uiState.teams.count { it.ownerUid == uiState.currentUid }
+    val joinedCount = uiState.teams.size
+    val atOwnedLimit = ownedCount >= MAX_OWNED_TEAMS
+    val atJoinedLimit = joinedCount >= MAX_JOINED_TEAMS
+    val canCreateMore = !atOwnedLimit && !atJoinedLimit
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             if (selectedTab == 0) {
-                FloatingActionButton(onClick = { showCreateDialog = true }) {
-                    androidx.compose.material3.Icon(
-                        Icons.Default.Add,
-                        contentDescription = "Create squad"
-                    )
+                FloatingActionButton(
+                    onClick = {
+                        if (canCreateMore) {
+                            showCreateDialog = true
+                        } else {
+                            scope.launch {
+                                val msg = if (atOwnedLimit) {
+                                    "You can only own $MAX_OWNED_TEAMS squads. Delete one to create another."
+                                } else {
+                                    "You can only be in $MAX_JOINED_TEAMS squads. Leave one to create another."
+                                }
+                                snackbarHostState.showSnackbar(msg)
+                            }
+                        }
+                    },
+                    modifier = Modifier.alpha(if (canCreateMore) 1f else 0.45f)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Create squad")
                 }
             }
         }
@@ -151,16 +176,36 @@ fun TeamsScreen(
                 .padding(16.dp)
                 .padding(padding)
         ) {
-            Text(
-                text = "Squads",
-                style = MaterialTheme.typography.headlineSmall
-            )
+            Text(text = "Squads", style = MaterialTheme.typography.headlineSmall)
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = "Keep your hoop crew together. Reuse the same squads when you start or join runs.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // ---- limits line ----
+            Text(
+                text = "Owned: $ownedCount/$MAX_OWNED_TEAMS • Joined: $joinedCount/$MAX_JOINED_TEAMS",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (atOwnedLimit) {
+                Text(
+                    text = "You’ve hit the owned-squad limit. Delete one to create another.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            if (atJoinedLimit) {
+                Text(
+                    text = "You’ve hit the joined-squad limit. Leave one to join/accept more.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
 
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -202,15 +247,10 @@ fun TeamsScreen(
                             badge = {
                                 val count = uiState.incomingInvites.size
                                 if (count > 0) {
-                                    // Number badge; if you want just a dot, remove Text()
-                                    Badge {
-                                        Text(if (count > 9) "9+" else count.toString())
-                                    }
+                                    Badge { Text(if (count > 9) "9+" else count.toString()) }
                                 }
                             }
-                        ) {
-                            Text("Invites")
-                        }
+                        ) { Text("Invites") }
                     }
                 )
             }
@@ -248,11 +288,8 @@ fun TeamsScreen(
 
                                         viewModel.loadMembersFor(tappedTeam) { ok, profiles, err ->
                                             membersLoading = false
-                                            if (ok) {
-                                                membersForTeam = profiles.orEmpty()
-                                            } else {
-                                                membersError = err
-                                            }
+                                            if (ok) membersForTeam = profiles.orEmpty()
+                                            else membersError = err
                                         }
                                     },
                                     onEdit = { t ->
@@ -271,9 +308,7 @@ fun TeamsScreen(
                                         viewModel.leaveTeam(leavingTeam.id) { ok, msg ->
                                             scope.launch {
                                                 if (ok) {
-                                                    snackbarHostState.showSnackbar(
-                                                        "Left ${leavingTeam.name}"
-                                                    )
+                                                    snackbarHostState.showSnackbar("Left ${leavingTeam.name}")
                                                 } else if (msg != null) {
                                                     snackbarHostState.showSnackbar(msg)
                                                 }
@@ -290,11 +325,8 @@ fun TeamsScreen(
 
                                         viewModel.loadJoinRequestsFor(tappedTeam) { ok, pending, err ->
                                             requestsLoading = false
-                                            if (ok) {
-                                                requestsForTeam = pending.orEmpty()
-                                            } else {
-                                                requestsError = err
-                                            }
+                                            if (ok) requestsForTeam = pending.orEmpty()
+                                            else requestsError = err
                                         }
                                     },
                                     onInvite = { squad ->
@@ -338,12 +370,19 @@ fun TeamsScreen(
                                     isMember = isMember,
                                     hasRequested = hasRequested,
                                     onRequestJoin = { t ->
+                                        if (atJoinedLimit) {
+                                            scope.launch {
+                                                snackbarHostState.showSnackbar(
+                                                    "You can only be in $MAX_JOINED_TEAMS squads. Leave one to join another."
+                                                )
+                                            }
+                                            return@DiscoverSquadRow
+                                        }
+
                                         viewModel.requestToJoinTeam(t.id) { ok, msg ->
                                             scope.launch {
                                                 if (ok) {
-                                                    snackbarHostState.showSnackbar(
-                                                        "Request sent to join ${t.name}"
-                                                    )
+                                                    snackbarHostState.showSnackbar("Request sent to join ${t.name}")
                                                 } else if (msg != null) {
                                                     snackbarHostState.showSnackbar(msg)
                                                 }
@@ -354,9 +393,7 @@ fun TeamsScreen(
                                         viewModel.cancelJoinRequest(t.id) { ok, msg ->
                                             scope.launch {
                                                 if (ok) {
-                                                    snackbarHostState.showSnackbar(
-                                                        "Request cancelled for ${t.name}"
-                                                    )
+                                                    snackbarHostState.showSnackbar("Request cancelled for ${t.name}")
                                                 } else if (msg != null) {
                                                     snackbarHostState.showSnackbar(msg)
                                                 }
@@ -372,11 +409,8 @@ fun TeamsScreen(
 
                                         viewModel.loadMembersFor(tappedTeam) { ok, profiles, err ->
                                             membersLoading = false
-                                            if (ok) {
-                                                membersForTeam = profiles.orEmpty()
-                                            } else {
-                                                membersError = err
-                                            }
+                                            if (ok) membersForTeam = profiles.orEmpty()
+                                            else membersError = err
                                         }
                                     }
                                 )
@@ -400,13 +434,21 @@ fun TeamsScreen(
                             items(uiState.incomingInvites, key = { it.inviteId }) { invite ->
                                 InviteRow(
                                     invite = invite,
+                                    canAccept = !atJoinedLimit,
                                     onAccept = {
+                                        if (atJoinedLimit) {
+                                            scope.launch {
+                                                snackbarHostState.showSnackbar(
+                                                    "You can only be in $MAX_JOINED_TEAMS squads. Leave one to accept this invite."
+                                                )
+                                            }
+                                            return@InviteRow
+                                        }
+
                                         viewModel.acceptInvite(invite.inviteId) { ok, msg ->
                                             scope.launch {
                                                 if (ok) {
-                                                    snackbarHostState.showSnackbar(
-                                                        "Joined ${invite.teamName}"
-                                                    )
+                                                    snackbarHostState.showSnackbar("Joined ${invite.teamName}")
                                                 } else if (msg != null) {
                                                     snackbarHostState.showSnackbar(msg)
                                                 }
@@ -417,9 +459,7 @@ fun TeamsScreen(
                                         viewModel.declineInvite(invite.inviteId) { ok, msg ->
                                             scope.launch {
                                                 if (ok) {
-                                                    snackbarHostState.showSnackbar(
-                                                        "Invite declined"
-                                                    )
+                                                    snackbarHostState.showSnackbar("Invite declined")
                                                 } else if (msg != null) {
                                                     snackbarHostState.showSnackbar(msg)
                                                 }
@@ -445,7 +485,6 @@ fun TeamsScreen(
     }
 
     // --------- Create squad dialog ---------
-
     if (showCreateDialog) {
         AlertDialog(
             onDismissRequest = {
@@ -477,15 +516,25 @@ fun TeamsScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
 
+                    if (!canCreateMore) {
+                        Text(
+                            text = if (atOwnedLimit) {
+                                "You’ve hit the owned-squad limit ($MAX_OWNED_TEAMS). Delete one to create another."
+                            } else {
+                                "You’ve hit the joined-squad limit ($MAX_JOINED_TEAMS). Leave one to create another."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+
                     // Skill section
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
                             text = "Preferred skill level",
                             style = MaterialTheme.typography.labelMedium
                         )
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             skillOptions.forEach { option ->
                                 FilterChip(
                                     selected = selectedSkill == option,
@@ -502,9 +551,7 @@ fun TeamsScreen(
                             text = "Days you usually play",
                             style = MaterialTheme.typography.labelMedium
                         )
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             dayOptions.forEach { day ->
                                 FilterChip(
                                     selected = selectedDays.contains(day),
@@ -552,7 +599,7 @@ fun TeamsScreen(
             },
             confirmButton = {
                 TextButton(
-                    enabled = !creating && newTeamName.isNotBlank(),
+                    enabled = !creating && newTeamName.isNotBlank() && canCreateMore,
                     onClick = {
                         if (newTeamName.isBlank()) return@TextButton
                         creating = true
@@ -579,9 +626,7 @@ fun TeamsScreen(
                             }
                         }
                     }
-                ) {
-                    Text(if (creating) "Creating…" else "Create")
-                }
+                ) { Text(if (creating) "Creating…" else "Create") }
             },
             dismissButton = {
                 TextButton(
@@ -594,15 +639,12 @@ fun TeamsScreen(
                         selectedDays = emptySet()
                         inviteOnly = false
                     }
-                ) {
-                    Text("Cancel")
-                }
+                ) { Text("Cancel") }
             }
         )
     }
 
     // --------- Edit squad dialog ---------
-
     val editTarget = teamBeingEdited
     if (editTarget != null) {
         AlertDialog(
@@ -632,15 +674,12 @@ fun TeamsScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    // Skill section
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
                             text = "Preferred skill level",
                             style = MaterialTheme.typography.labelMedium
                         )
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             skillOptions.forEach { option ->
                                 FilterChip(
                                     selected = editSelectedSkill == option,
@@ -651,15 +690,12 @@ fun TeamsScreen(
                         }
                     }
 
-                    // Days section
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
                             text = "Days you usually play",
                             style = MaterialTheme.typography.labelMedium
                         )
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             dayOptions.forEach { day ->
                                 FilterChip(
                                     selected = editSelectedDays.contains(day),
@@ -676,7 +712,6 @@ fun TeamsScreen(
                         }
                     }
 
-                    // Privacy section
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -732,9 +767,7 @@ fun TeamsScreen(
                             }
                         }
                     }
-                ) {
-                    Text(if (editing) "Saving…" else "Save")
-                }
+                ) { Text(if (editing) "Saving…" else "Save") }
             },
             dismissButton = {
                 TextButton(
@@ -744,15 +777,12 @@ fun TeamsScreen(
                         editName = ""
                         editError = null
                     }
-                ) {
-                    Text("Cancel")
-                }
+                ) { Text("Cancel") }
             }
         )
     }
 
     // --------- Delete squad dialog ---------
-
     val deleteTarget = teamBeingDeleted
     if (deleteTarget != null) {
         AlertDialog(
@@ -794,9 +824,7 @@ fun TeamsScreen(
                             }
                         }
                     }
-                ) {
-                    Text(if (deleting) "Deleting…" else "Delete")
-                }
+                ) { Text(if (deleting) "Deleting…" else "Delete") }
             },
             dismissButton = {
                 TextButton(
@@ -805,15 +833,12 @@ fun TeamsScreen(
                         teamBeingDeleted = null
                         deleteError = null
                     }
-                ) {
-                    Text("Cancel")
-                }
+                ) { Text("Cancel") }
             }
         )
     }
 
     // --------- Invite players dialog (owner -> player) ---------
-
     if (showInviteDialog && invitingTeam != null) {
         AlertDialog(
             onDismissRequest = {
@@ -864,17 +889,13 @@ fun TeamsScreen(
                                 invitingTeam = null
                                 inviteUsername = ""
                                 inviteError = null
-                                scope.launch {
-                                    snackbarHostState.showSnackbar("Invite sent")
-                                }
+                                scope.launch { snackbarHostState.showSnackbar("Invite sent") }
                             } else {
                                 inviteError = msg
                             }
                         }
                     }
-                ) {
-                    Text(if (inviting) "Sending…" else "Send invite")
-                }
+                ) { Text(if (inviting) "Sending…" else "Send invite") }
             },
             dismissButton = {
                 TextButton(
@@ -885,15 +906,12 @@ fun TeamsScreen(
                         inviteUsername = ""
                         inviteError = null
                     }
-                ) {
-                    Text("Cancel")
-                }
+                ) { Text("Cancel") }
             }
         )
     }
 
     // --------- Members bottom sheet ---------
-
     if (showMembersSheet) {
         ModalBottomSheet(
             onDismissRequest = {
@@ -963,7 +981,6 @@ fun TeamsScreen(
     }
 
     // --------- Join requests bottom sheet (owner only) ---------
-
     if (showRequestsSheet) {
         ModalBottomSheet(
             onDismissRequest = {
@@ -1032,6 +1049,7 @@ fun TeamsScreen(
                                         } ?: req.uid,
                                         style = MaterialTheme.typography.bodyLarge
                                     )
+
                                     if (profile != null &&
                                         !profile.displayName.isNullOrBlank() &&
                                         profile.displayName != profile.username
@@ -1042,6 +1060,7 @@ fun TeamsScreen(
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
+
                                     if (profile != null) {
                                         Text(
                                             text = "Skill: ${profile.skillLevel}",
@@ -1059,9 +1078,7 @@ fun TeamsScreen(
                                                     if (ok) {
                                                         requestsForTeam =
                                                             requestsForTeam.filterNot { it.uid == req.uid }
-                                                        snackbarHostState.showSnackbar(
-                                                            "Approved request"
-                                                        )
+                                                        snackbarHostState.showSnackbar("Approved request")
                                                     } else if (msg != null) {
                                                         snackbarHostState.showSnackbar(msg)
                                                     }
@@ -1070,15 +1087,14 @@ fun TeamsScreen(
                                         }) {
                                             Text("Approve")
                                         }
+
                                         OutlinedButton(onClick = {
                                             viewModel.denyJoin(requestsTeamId, req.uid) { ok, msg ->
                                                 scope.launch {
                                                     if (ok) {
                                                         requestsForTeam =
                                                             requestsForTeam.filterNot { it.uid == req.uid }
-                                                        snackbarHostState.showSnackbar(
-                                                            "Denied request"
-                                                        )
+                                                        snackbarHostState.showSnackbar("Denied request")
                                                     } else if (msg != null) {
                                                         snackbarHostState.showSnackbar(msg)
                                                     }

@@ -28,11 +28,14 @@ fun CourtCard(
     onLeaveRun: (runId: String) -> Unit,
     onCancelRequestRun: (runId: String) -> Unit,
     hasPendingRequestForRun: (runId: String) -> Boolean,
-    onViewRun: (runId: String) -> Unit,
+
+    // ✅ changed: now includes hidePlayers
+    onViewRun: (runId: String, hidePlayers: Boolean) -> Unit,
+
     starsVm: StarsViewModel,
     prefsVm: PrefsViewModel,
 
-    // ✅ NEW: host uid -> label resolver (username/displayName)
+    // ✅ host uid -> label resolver (username/displayName)
     hostLabelForUid: (String) -> String?
 ) {
     val courtId = row.courtId
@@ -74,20 +77,24 @@ fun CourtCard(
             if (row.runsForCard.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     row.runsForCard.forEach { rr ->
-                        val hostUid = (rr.hostUid ?: rr.hostId).orEmpty()
-                        val hostLabel = hostLabelForUid(hostUid)
+                        // ✅ IMPORTANT: handle blank hostUid so fallback works
+                        val hostUid = rr.hostUid?.trim()?.takeIf { it.isNotBlank() }
+                            ?: rr.hostId?.trim()?.takeIf { it.isNotBlank() }
+                            ?: ""
+
+                        val hostLabel = if (hostUid.isNotBlank()) hostLabelForUid(hostUid) else null
 
                         RunRow(
                             rr = rr,
                             currentUid = uid,
-                            onView = { onViewRun(rr.id) },
+                            onView = { hidePlayers ->
+                                onViewRun(rr.id, hidePlayers)
+                            },
                             onJoin = { onJoinRun(rr.id) },
                             onRequestJoin = { onRequestJoinRun(rr.id) },
                             onLeave = { onLeaveRun(rr.id) },
                             hasPendingRequest = hasPendingRequestForRun(rr.id),
                             onCancelRequest = { onCancelRequestRun(rr.id) },
-
-                            // ✅ NEW (you add this param to RunRow)
                             hostLabel = hostLabel
                         )
                     }

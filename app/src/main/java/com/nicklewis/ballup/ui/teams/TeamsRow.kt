@@ -33,7 +33,6 @@ fun SquadRow(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         colors = CardDefaults.cardColors(
-            // ✅ lighter than surfaceVariant
             containerColor = MaterialTheme.colorScheme.surface
         )
     ) {
@@ -150,7 +149,6 @@ fun DiscoverSquadRow(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
         colors = CardDefaults.cardColors(
-            // ✅ lighter card
             containerColor = MaterialTheme.colorScheme.surface
         )
     ) {
@@ -159,7 +157,6 @@ fun DiscoverSquadRow(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
-            // (rest unchanged)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -188,16 +185,14 @@ fun DiscoverSquadRow(
 @Composable
 fun InviteRow(
     invite: TeamsRepository.TeamInviteForUser,
+    canAccept: Boolean,
     onAccept: () -> Unit,
     onDecline: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        colors = CardDefaults.cardColors(
-            // ✅ lighter card
-            containerColor = MaterialTheme.colorScheme.surface
-        )
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(
             modifier = Modifier
@@ -212,6 +207,15 @@ fun InviteRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
+            if (!canAccept) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "You’ve hit the joined-squad limit. Leave one to accept.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+
             Spacer(Modifier.height(8.dp))
 
             Row(
@@ -219,7 +223,10 @@ fun InviteRow(
                 modifier = Modifier.align(Alignment.End)
             ) {
                 OutlinedButton(onClick = onDecline) { Text("Decline") }
-                Button(onClick = onAccept) { Text("Accept") }
+                Button(
+                    onClick = onAccept,
+                    enabled = canAccept
+                ) { Text("Accept") }
             }
         }
     }
